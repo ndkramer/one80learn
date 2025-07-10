@@ -1,0 +1,75 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+  .prose {
+    @apply text-gray-900;
+  }
+  
+  .prose h1 {
+    @apply text-2xl font-bold mb-4 mt-6;
+  }
+  
+  .prose h2 {
+    @apply text-xl font-bold mb-3 mt-5;
+  }
+  
+  .prose p {
+    @apply mb-4;
+  }
+  
+  .prose blockquote {
+    @apply pl-4 border-l-4 border-gray-300 italic my-4
+  }
+  
+  .prose ul {
+    @apply list-disc pl-5 mb-4
+  }
+  
+  .prose ol {
+    @apply list-decimal pl-5 mb-4
+  }
+  
+  .prose a {
+    @apply text-[#F98B3D] hover:text-[#e07a2c] underline
+  }
+}
+
+/* TipTap Editor Styles */
+.ProseMirror {
+  min-height: 200px;
+  outline: none;
+}
+
+.ProseMirror p {
+  margin: 1em 0;
+}
+
+.ProseMirror > *:first-child {
+  margin-top: 0;
+}
+
+.ProseMirror > *:last-child {
+  margin-bottom: 0;
+}
+
+.ProseMirror ul,
+.ProseMirror ol {
+  padding: 0 1rem;
+}
+
+.ProseMirror blockquote {
+  border-left: 4px solid #e5e7eb;
+  padding-left: 1rem;
+  font-style: italic;
+  color: #6b7280;
+}
+
+.ProseMirror p.is-editor-empty:first-child::before {
+  color: #9ca3af;
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
