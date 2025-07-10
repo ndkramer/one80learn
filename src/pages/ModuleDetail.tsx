@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate, useBeforeUnload, useLocation } from 'react-router-dom';
-import { ChevronLeft, Save, FileText, Link as LinkIcon, ExternalLink, CheckCircle, Download, AlertTriangle } from 'lucide-react';
+import { ChevronLeft, Save, FileText, Link as LinkIcon, ExternalLink, CheckCircle, Download, AlertTriangle, Presentation } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { useAuth } from '../utils/authContext';
 import { useClass } from '../utils/classContext';
@@ -9,9 +9,12 @@ import { useNotes } from '../utils/noteContext';
 import RichTextEditor from '../components/RichTextEditor';
 import ErrorBoundary from '../components/ErrorBoundary';
 import SlideViewer from '../components/SlideViewer';
+import SyncedSlideViewer from '../components/SyncedSlideViewer';
+import InstructorPresentationControl from '../components/InstructorPresentationControl';
 import Button from '../components/Button';
 import Alert from '../components/Alert';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { isModuleInstructor, moduleSupportsSync } from '../utils/instructorAuth';
 import { PDFDocument } from 'pdf-lib';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
@@ -35,6 +38,13 @@ const ModuleDetail: React.FC = () => {
   const [noteError, setNoteError] = useState<string | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
   const [initialNoteContent, setInitialNoteContent] = useState('');
+  
+  // Presentation sync state
+  const [isInstructor, setIsInstructor] = useState(false);
+  const [supportsSync, setSupportsSync] = useState(false);
+  const [currentSlide, setCurrentSlide] = useState(1);
+  const [totalSlides, setTotalSlides] = useState(0);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   
   // For navigation warning
   const [showNavigationWarning, setShowNavigationWarning] = useState(false);
@@ -185,10 +195,56 @@ const ModuleDetail: React.FC = () => {
     };
   }, [moduleId, user?.id, getNoteForModule]);
 
+  // Check instructor permissions and sync support
+  useEffect(() => {
+    const checkPresentationCapabilities = async () => {
+      if (!moduleId) {
+        setIsCheckingAuth(false);
+        return;
+      }
+
+      try {
+        setIsCheckingAuth(true);
+        
+        // Check if user is instructor for this module
+        const instructorCheck = await isModuleInstructor(moduleId);
+        setIsInstructor(instructorCheck);
+
+        // Check if module supports sync
+        const syncSupport = await moduleSupportsSync(moduleId);
+        setSupportsSync(syncSupport);
+
+        // If module supports sync, get PDF page count from database
+        if (syncSupport) {
+          const { data: moduleData } = await supabase
+            .from('modules')
+            .select('pdf_total_pages')
+            .eq('id', moduleId)
+            .single();
+
+          if (moduleData?.pdf_total_pages) {
+            setTotalSlides(moduleData.pdf_total_pages);
+          }
+        }
+      } catch (error) {
+        console.error('Error checking presentation capabilities:', error);
+      } finally {
+        setIsCheckingAuth(false);
+      }
+    };
+
+    checkPresentationCapabilities();
+  }, [moduleId]);
+
   // Track changes to note content
   const handleNoteChange = (content: string) => {
     setNoteContent(content);
     setHasUnsavedChanges(content !== initialNoteContent);
+  };
+
+  // Handle slide changes from presentation sync
+  const handleSlideChange = (slide: number) => {
+    setCurrentSlide(slide);
   };
 
   const handleToggleProgress = async () => {
@@ -450,15 +506,57 @@ const ModuleDetail: React.FC = () => {
       
       {/* Content area */}
       <div className="space-y-6">
-        {/* Slides column */}
-        <div className="bg-white rounded-lg shadow-md overflow-hidden min-h-[600px]">
-          <div className="relative">
-            <ErrorBoundary>
-              <SlideViewer
-                title={`Slides for ${module.title}`}
-                pdfUrl={module.slide_pdf_url}
-              />
-            </ErrorBoundary>
+        {/* Slides section */}
+        <div className="space-y-4">
+          {/* Instructor Controls - Only show for instructors when sync is supported */}
+          {isInstructor && supportsSync && !isCheckingAuth && (
+            <div className="bg-white rounded-lg shadow-md overflow-hidden">
+              <ErrorBoundary>
+                <InstructorPresentationControl
+                  moduleId={moduleId!}
+                  totalSlides={totalSlides}
+                  currentSlide={currentSlide}
+                  onSlideChange={handleSlideChange}
+                  presentationTitle={module.title}
+                />
+              </ErrorBoundary>
+            </div>
+          )}
+
+          {/* Slides viewer */}
+          <div className="bg-white rounded-lg shadow-md overflow-hidden min-h-[600px]">
+            <div className="relative">
+              <ErrorBoundary>
+                {supportsSync && !isCheckingAuth ? (
+                  <SyncedSlideViewer
+                    title={`Slides for ${module.title}`}
+                    moduleId={moduleId!}
+                    pdfUrl={module.slide_pdf_url}
+                  />
+                ) : (
+                  <SlideViewer
+                    title={`Slides for ${module.title}`}
+                    pdfUrl={module.slide_pdf_url}
+                  />
+                )}
+              </ErrorBoundary>
+              
+              {/* Sync capability indicator */}
+              {!isCheckingAuth && (
+                <div className="absolute top-4 left-4 z-10">
+                  {supportsSync ? (
+                    <div className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-xs font-medium flex items-center">
+                      <Presentation size={12} className="mr-1" />
+                      Sync Enabled
+                    </div>
+                  ) : (
+                    <div className="bg-gray-100 text-gray-600 px-3 py-1 rounded-full text-xs font-medium">
+                      Standard View
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </div>
         

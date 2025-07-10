@@ -39,6 +39,9 @@ export interface Module extends Omit<DbModule, 'slide_pdf_url'> {
   slideUrl?: string;
   slide_pdf_url?: string;
   resources: Resource[];
+  supports_sync?: boolean;
+  pdf_total_pages?: number;
+  presentation_title?: string;
 }
 
 export interface Resource extends DbResource {
