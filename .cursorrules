@@ -1,0 +1,146 @@
+# One80Learn - Cursor AI Brand Guidelines & Code Rules
+
+## 🎨 Brand Colors
+- **Primary Orange**: Use `#F98B3D` for buttons, links, active states, accents
+- **Primary Hover**: Use `#e07a2c` for hover states
+- **Primary Light**: Use `#F98B3D10` (10% opacity) for subtle backgrounds
+- **Focus Ring**: Use `focus:ring-[#F98B3D]` for form inputs and buttons
+
+## 🌈 Color Usage Rules
+- **Backgrounds**: Use `bg-white`, `bg-gray-50`, `bg-gray-100`
+- **Text Colors**: Use `text-gray-900` (primary), `text-gray-700` (secondary), `text-gray-500` (muted)
+- **Borders**: Use `border-gray-200` (light), `border-gray-300` (default)
+- **Never use**: Custom colors outside the defined palette
+
+## 🧩 Component Patterns
+- **Reference existing components** in `/src/components/` before creating new ones
+- **Reuse Button component** with variants: `primary`, `secondary`, `outline`, `ghost`
+- **Use ClassCard pattern** for course displays with consistent hover effects
+- **Follow Layout structure** with collapsible sidebar and responsive design
+- **Use Alert component** for notifications with semantic colors
+
+## 📏 Spacing & Layout
+- **Use Tailwind spacing**: `p-4`, `mt-6`, `mb-4`, `space-x-3`, etc.
+- **Container max-width**: Use `max-w-7xl mx-auto` for main content areas
+- **Card padding**: Use `p-6` for desktop, `p-4` for mobile
+- **Button spacing**: Use `px-4 py-2` (medium), `px-3 py-1.5` (small), `px-6 py-3` (large)
+- **Icon spacing**: Use `mr-2` or `ml-2` for icons next to text
+
+## 🎯 Interactive Elements
+- **Button hover**: Always include hover states with `hover:bg-[#e07a2c]` for primary
+- **Transitions**: Use `transition-colors duration-200` for smooth interactions  
+- **Loading states**: Use orange spinner with `border-[#F98B3D]`
+- **Focus states**: Include `focus:outline-none focus:ring-2 focus:ring-[#F98B3D]`
+
+## 📱 Responsive Design
+- **Mobile-first**: Start with mobile styles, add larger breakpoints
+- **Breakpoints**: Use `sm:`, `md:`, `lg:`, `xl:` prefixes
+- **Sidebar**: Implement collapsible sidebar that becomes slide-over on mobile
+- **Touch targets**: Minimum 44px height for mobile buttons
+
+## 📝 Typography Rules
+- **Headings**: Use `text-2xl font-bold` (h1), `text-xl font-bold` (h2), `text-lg font-medium` (h3)
+- **Body text**: Use `text-base` (16px) as default
+- **Small text**: Use `text-sm` (14px) for secondary info
+- **Links**: Use `text-[#F98B3D] hover:text-[#e07a2c] underline`
+- **Font weights**: Use `font-medium` (500) or `font-bold` (700)
+
+## 🔧 Component Structure
+- **TypeScript**: Always use TypeScript with proper interface definitions
+- **Props interface**: Define clear props interface for each component
+- **Error boundaries**: Include error handling and loading states
+- **Accessibility**: Include ARIA labels, proper focus management
+- **Consistent naming**: Use PascalCase for components, camelCase for functions
+
+## 🎨 Icon Usage
+- **Library**: Use Lucide React icons exclusively
+- **Sizes**: Use `size={16}` (small), `size={20}` (medium), `size={24}` (large)
+- **Colors**: Use `text-[#F98B3D]` for accent icons, inherit for others
+- **Common icons**: `ChevronRight`, `ChevronDown`, `BookOpen`, `User`, `FileText`
+
+## 🚨 Form Patterns
+- **Input styling**: Use `border border-gray-300 rounded-md focus:ring-[#F98B3D] focus:border-transparent`
+- **Labels**: Use `text-sm font-medium text-gray-700 mb-1`
+- **Error states**: Use `border-red-300 text-red-900` with error icons
+- **Required fields**: Indicate with asterisk or clear labeling
+- **Submit buttons**: Use primary button variant with loading states
+
+## 🎯 Navigation Patterns
+- **Active states**: Use `bg-[#F98B3D] text-white` for active nav items
+- **Hover states**: Use `hover:bg-gray-200` for inactive nav items
+- **Module indicators**: Use numbered circles with `bg-[#F98B3D]` for active
+- **Breadcrumbs**: Use `text-[#F98B3D]` for clickable segments
+
+## 📋 Card Component Rules
+- **Base styling**: Use `bg-white rounded-lg shadow-md`
+- **Hover effects**: Use `hover:shadow-lg transition-shadow duration-200`
+- **Image containers**: Use `h-52` for course thumbnails with `object-cover`
+- **Action buttons**: Place in bottom-right with orange primary styling
+
+## 🔐 Admin Interface Patterns
+- **Admin navigation**: Use consistent orange accent for active states
+- **Data tables**: Use zebra striping with `bg-gray-50` on alternating rows
+- **Action buttons**: Group related actions with consistent spacing
+- **Form layouts**: Use two-column layouts on desktop, single column on mobile
+
+## ⚡ Performance Rules
+- **Lazy loading**: Use React.lazy for route components
+- **Image optimization**: Include proper alt tags and loading states
+- **Bundle size**: Avoid large dependencies, prefer tree-shakeable libraries
+- **Memoization**: Use React.memo for expensive components
+
+## ♿ Accessibility Requirements
+- **Color contrast**: Ensure 4.5:1 ratio for text, 3:1 for large text
+- **Focus indicators**: Always visible and using brand orange
+- **Screen readers**: Include descriptive aria-labels and roles
+- **Keyboard navigation**: Support tab navigation and enter/space activation
+
+## 🧪 Testing Patterns
+- **Loading states**: Always include loading spinners and skeleton states
+- **Error handling**: Graceful error messages with retry options
+- **Empty states**: Clear messaging with call-to-action buttons
+- **Responsive testing**: Test on mobile, tablet, and desktop sizes
+
+## 📁 File Organization
+- **Components**: Place reusable components in `/src/components/`
+- **Pages**: Place route components in `/src/pages/`
+- **Utils**: Place utilities and contexts in `/src/utils/`
+- **Types**: Define TypeScript types in `/src/types/`
+
+## 🎪 Animation Guidelines
+- **Duration**: Use `duration-200` for most transitions
+- **Easing**: Use default easing or `ease-in-out`
+- **Loading spinners**: Use `animate-spin` with orange border
+- **Hover animations**: Subtle scale or shadow changes only
+
+## 🔍 Code Quality Rules
+- **No magic numbers**: Use semantic spacing values
+- **Consistent formatting**: Follow existing indentation and spacing
+- **Comment complex logic**: Explain business logic and edge cases
+- **Error handling**: Always handle async operations with try/catch
+- **Type safety**: Use strict TypeScript, avoid `any` types
+
+## 📚 Reference Files
+- **Brand Guidelines**: See `brand-guidelines.md` for detailed design system
+- **Button Component**: Reference `/src/components/Button.tsx` for button patterns
+- **Layout Component**: Reference `/src/components/Layout.tsx` for navigation
+- **Color Examples**: Search codebase for `#F98B3D` to see color usage
+
+## 🚀 Development Workflow
+- **Component development**: Start with TypeScript interface, then implement
+- **Styling approach**: Use Tailwind utilities, avoid custom CSS
+- **State management**: Use React Context for shared state
+- **API calls**: Use Supabase client with proper error handling
+
+## ⚠️ Common Mistakes to Avoid
+- **Don't use**: Custom colors outside the defined palette
+- **Don't mix**: Different spacing systems (stick to Tailwind)
+- **Don't skip**: Loading states and error handling
+- **Don't ignore**: Mobile responsiveness and accessibility
+- **Don't create**: New components without checking existing ones first
+
+---
+
+**Always reference the brand-guidelines.md file for detailed design system information**
+**Maintain consistency with existing components and patterns**
+**Prioritize accessibility and responsive design in all implementations** 
