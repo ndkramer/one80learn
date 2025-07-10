@@ -221,7 +221,6 @@ const SlideViewer: React.FC<SlideViewerProps> = ({ title, pdfUrl }) => {
                 renderTextLayer={true}
                 renderAnnotationLayer={true}
                 className="shadow-lg"
-                className="shadow-lg"
               />
             )}
           </Document>
