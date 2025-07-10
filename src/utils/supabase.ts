@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { Database } from '../types/database';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -21,7 +22,8 @@ if (!supabaseAnonKey) {
 console.log('Supabase URL:', supabaseUrl);
 console.log('Supabase Anon Key:', supabaseAnonKey?.slice(0, 8) + '...');
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+// Create typed Supabase client
+export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
@@ -29,7 +31,13 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
   global: {
     headers: {
-      'X-Client-Info': 'student-learning-platform'
+      'X-Client-Info': 'one80learn-platform'
     }
   }
 });
+
+// Type-safe helper functions
+export const getTypedSupabaseClient = () => supabase;
+
+// Export the typed client type for use in contexts and components
+export type TypedSupabaseClient = typeof supabase;
