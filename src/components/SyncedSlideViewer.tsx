@@ -24,8 +24,8 @@ import {
   SyncStatus, 
   PresentationSyncCallbacks 
 } from '../utils/presentationSyncManager';
-import { Alert } from './Alert';
-import { Button } from './Button';
+import Alert from './Alert';
+import Button from './Button';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 

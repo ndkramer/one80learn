@@ -20,8 +20,8 @@ import {
   SessionParticipant,
   PresentationSyncCallbacks 
 } from '../utils/presentationSyncManager';
-import { Alert } from './Alert';
-import { Button } from './Button';
+import Alert from './Alert';
+import Button from './Button';
 
 interface InstructorPresentationControlProps {
   moduleId: string;
