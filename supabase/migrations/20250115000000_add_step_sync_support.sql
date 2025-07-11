@@ -177,8 +177,11 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 -- 4. CREATE ENHANCED VIEWS
 -- ==================================================
 
--- Update active_course_sessions view to include step information
-CREATE OR REPLACE VIEW active_course_sessions AS
+-- Drop existing view to avoid column conflicts
+DROP VIEW IF EXISTS active_course_sessions;
+
+-- Create enhanced view with step information
+CREATE VIEW active_course_sessions AS
 SELECT 
   ps.id,
   ps.class_id,
