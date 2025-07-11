@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../utils/supabase';
 import Button from '../../components/Button';
 import Alert from '../../components/Alert';
-import { BookOpen, Search, Plus, Pencil, Trash2, X, FileText, Layers, Upload, Image } from 'lucide-react';
+import { BookOpen, Search, Plus, Pencil, Trash2, X, FileText, Layers, Upload, Image, User } from 'lucide-react';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -24,6 +24,12 @@ interface Course {
   created_at: string;
 }
 
+interface SuperAdminUser {
+  id: string;
+  email: string;
+  full_name?: string;
+}
+
 const CourseAdmin: React.FC = () => {
   const navigate = useNavigate();
   console.log('CourseAdmin - Component mounted');
@@ -36,10 +42,12 @@ const CourseAdmin: React.FC = () => {
   const [editingCourse, setEditingCourse] = useState<Course | null>(null);
   const [selectedThumbnailFile, setSelectedThumbnailFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [superAdminUsers, setSuperAdminUsers] = useState<SuperAdminUser[]>([]);
   const [formData, setFormData] = useState({
     title: '',
     description: '',
     thumbnailUrl: '',
+    instructorId: '',
     startDate: '',
     endDate: '',
     startTime: '',
@@ -50,6 +58,7 @@ const CourseAdmin: React.FC = () => {
 
   useEffect(() => {
     loadCourses();
+    loadSuperAdminUsers();
   }, []);
 
   useEffect(() => {
@@ -58,6 +67,7 @@ const CourseAdmin: React.FC = () => {
         title: editingCourse.title,
         description: editingCourse.description,
         thumbnailUrl: editingCourse.thumbnail_url,
+        instructorId: editingCourse.instructor_id,
         startDate: editingCourse.schedule_data.startDate,
         endDate: editingCourse.schedule_data.endDate,
         startTime: editingCourse.schedule_data.startTime,
@@ -71,6 +81,7 @@ const CourseAdmin: React.FC = () => {
         title: '',
         description: '',
         thumbnailUrl: '',
+        instructorId: '',
         startDate: '',
         endDate: '',
         startTime: '',
@@ -114,6 +125,48 @@ const CourseAdmin: React.FC = () => {
       setError(err instanceof Error ? err.message : 'Failed to load courses');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const loadSuperAdminUsers = async () => {
+    try {
+      console.log('CourseAdmin - Loading super admin users');
+      
+      // Call the manage-users edge function to get all users
+      const { data: session } = await supabase.auth.getSession();
+      if (!session.session) {
+        console.error('No auth session available');
+        return;
+      }
+
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/manage-users`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${session.session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch users');
+      }
+
+      const authUsersData = await response.json();
+      
+      // Filter for super admin users
+      const adminUsers: SuperAdminUser[] = authUsersData.users
+        .filter((user: any) => user.user_metadata?.is_super_admin === true)
+        .map((user: any) => ({
+          id: user.id,
+          email: user.email || '',
+          full_name: user.user_metadata?.full_name || user.user_metadata?.name || user.email
+        }));
+
+      console.log('CourseAdmin - Super admin users loaded:', adminUsers);
+      setSuperAdminUsers(adminUsers);
+    } catch (err) {
+      console.error('CourseAdmin - Error loading super admin users:', err);
+      // Don't set error state here to avoid disrupting the main UI
     }
   };
 
@@ -178,8 +231,9 @@ const CourseAdmin: React.FC = () => {
     setSuccess(null);
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('No authenticated user');
+      if (!formData.instructorId) {
+        throw new Error('Please select an instructor');
+      }
 
       let thumbnailUrlToUse = formData.thumbnailUrl;
       if (selectedThumbnailFile) {
@@ -195,7 +249,7 @@ const CourseAdmin: React.FC = () => {
         .insert([{
           title: formData.title,
           description: formData.description,
-          instructor_id: user.id,
+          instructor_id: formData.instructorId,
           thumbnail_url: thumbnailUrlToUse,
           schedule_data: {
             startDate: formData.startDate,
@@ -217,6 +271,7 @@ const CourseAdmin: React.FC = () => {
         title: '',
         description: '',
         thumbnailUrl: '',
+        instructorId: '',
         startDate: '',
         endDate: '',
         startTime: '',
@@ -242,6 +297,10 @@ const CourseAdmin: React.FC = () => {
     setSuccess(null);
 
     try {
+      if (!formData.instructorId) {
+        throw new Error('Please select an instructor');
+      }
+
       let thumbnailUrlToUse = formData.thumbnailUrl;
       if (selectedThumbnailFile) {
         thumbnailUrlToUse = await uploadThumbnail(selectedThumbnailFile);
@@ -252,6 +311,7 @@ const CourseAdmin: React.FC = () => {
         .update({
           title: formData.title,
           description: formData.description,
+          instructor_id: formData.instructorId,
           thumbnail_url: thumbnailUrlToUse,
           schedule_data: {
             startDate: formData.startDate,
@@ -488,6 +548,33 @@ const CourseAdmin: React.FC = () => {
                     className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#F98B3D] focus:border-transparent"
                     placeholder="Enter course description..."
                   />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Instructor
+                  </label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                      <User size={16} className="text-gray-400" />
+                    </div>
+                    <select
+                      value={formData.instructorId}
+                      onChange={(e) => setFormData(prev => ({ ...prev, instructorId: e.target.value }))}
+                      required
+                      className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#F98B3D] focus:border-transparent"
+                    >
+                      <option value="">Select an instructor...</option>
+                      {superAdminUsers.map(user => (
+                        <option key={user.id} value={user.id}>
+                          {user.full_name || user.email}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Only users with super admin privileges can be assigned as instructors
+                  </p>
                 </div>
 
                 <div>

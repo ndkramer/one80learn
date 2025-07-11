@@ -6,6 +6,9 @@ import { Database } from '../types/database';
 export interface PresentationSession {
   id: string;
   module_id: string;
+  class_id?: string;
+  current_module_id?: string;
+  current_step_id?: string;
   instructor_id: string;
   current_slide: number;
   total_slides: number;
@@ -41,6 +44,8 @@ export interface PresentationSyncCallbacks {
   onParticipantUpdate?: (participants: SessionParticipant[]) => void;
   onSessionEnd?: () => void;
   onError?: (error: string) => void;
+  onModuleSwitch?: (newModuleId: string, startSlide: number) => void; // New callback for module switches
+  onStepSwitch?: (stepId: string, startSlide: number) => void; // New callback for step switches
 }
 
 /**
@@ -289,103 +294,449 @@ export class PresentationSyncManager {
   }
 
   /**
+   * Create a course-level session that can span multiple modules (Enhanced)
+   */
+  async createCourseSession(
+    classId: string,
+    sessionName?: string
+  ): Promise<string | null> {
+    if (!this.userId) {
+      this.callbacks.onError?.('User not authenticated');
+      return null;
+    }
+
+    try {
+      console.log('🎓 Creating course-level session for class:', classId);
+      console.log('👤 Instructor ID:', this.userId);
+      console.log('📝 Session name:', sessionName || 'Course Presentation');
+
+      // Call the database function to create course session
+      const { data, error } = await supabase.rpc('create_course_session', {
+        p_class_id: classId,
+        p_instructor_id: this.userId,
+        p_session_name: sessionName || 'Course Presentation'
+      });
+
+      console.log('📊 Database response:', { data, error });
+
+      if (error) {
+        console.error('❌ Database function error:', error);
+        throw error;
+      }
+
+      const sessionId = data;
+      console.log('✅ Course session created:', sessionId);
+
+      // Get the session data
+      const { data: sessionData, error: sessionError } = await supabase
+        .from('presentation_sessions')
+        .select('*')
+        .eq('id', sessionId)
+        .single();
+
+      if (sessionError) throw sessionError;
+
+      this.currentSession = sessionData;
+      this.isInstructor = true;
+      this.syncStatus = {
+        ...this.syncStatus,
+        isInstructor: true,
+        currentSlide: 1,
+        totalSlides: 1, // Will be updated when switching to first module
+        sessionId: sessionData.id,
+        isSync: true,
+        isConnected: false // Will be set when realtime connects
+      };
+
+      // Set up realtime channel for this session
+      this.setupRealtimeChannel(sessionData.id);
+      this.callbacks.onSyncStatusChange?.(this.syncStatus);
+      
+      console.log('🎓 Course session setup complete:', sessionData.id);
+      return sessionData.id;
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : (error as any)?.message || String(error);
+      console.error('createCourseSession error:', error);
+      this.callbacks.onError?.(`Failed to create course session: ${errorMessage}`);
+      return null;
+    }
+  }
+
+  /**
+   * Switch the active session to a different module within the same course
+   */
+  async switchToModule(
+    moduleId: string,
+    totalSlides: number,
+    startSlide: number = 1
+  ): Promise<boolean> {
+    if (!this.currentSession?.id) {
+      this.callbacks.onError?.('No active session to switch modules');
+      return false;
+    }
+
+    if (!this.isInstructor) {
+      this.callbacks.onError?.('Only instructors can switch modules');
+      return false;
+    }
+
+    try {
+      console.log('🔄 Switching session to module:', moduleId, 'with', totalSlides, 'slides');
+
+      // Call the database function to switch modules
+      const { data, error } = await supabase.rpc('switch_session_to_module', {
+        p_session_id: this.currentSession.id,
+        p_module_id: moduleId,
+        p_total_slides: totalSlides,
+        p_start_slide: startSlide
+      });
+
+      if (error) throw error;
+
+      console.log('✅ Module switch successful');
+
+      // Update local session state
+      this.currentSession.current_module_id = moduleId;
+      this.currentSession.module_id = moduleId; // For backward compatibility
+      this.currentSession.total_slides = totalSlides;
+      this.currentSession.current_slide = startSlide;
+
+      this.syncStatus = {
+        ...this.syncStatus,
+        currentSlide: startSlide,
+        totalSlides: totalSlides
+      };
+
+      // Notify listeners about the module switch
+      this.callbacks.onSlideChange?.(startSlide);
+      this.callbacks.onSyncStatusChange?.(this.syncStatus);
+
+      console.log('🎯 Module switch completed - now presenting module:', moduleId);
+      return true;
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : (error as any)?.message || String(error);
+      console.error('switchToModule error:', error);
+      this.callbacks.onError?.(`Failed to switch modules: ${errorMessage}`);
+      return false;
+    }
+  }
+
+  /**
+   * Switch the active session to a different step within the same module
+   */
+  async switchToStep(
+    stepId: string,
+    totalSlides: number,
+    startSlide: number = 1
+  ): Promise<boolean> {
+    if (!this.currentSession?.id) {
+      this.callbacks.onError?.('No active session to switch steps');
+      return false;
+    }
+
+    if (!this.isInstructor) {
+      this.callbacks.onError?.('Only instructors can switch steps');
+      return false;
+    }
+
+    try {
+      console.log('🔄 Switching session to step:', stepId, 'with', totalSlides, 'slides');
+
+      // Get step details to validate and get module_id
+      const { data: stepData, error: stepError } = await supabase
+        .from('steps')
+        .select('module_id, title, step_number, modules!inner(class_id)')
+        .eq('id', stepId)
+        .single();
+
+      if (stepError || !stepData) {
+        throw new Error(`Step not found: ${stepError?.message || 'Unknown error'}`);
+      }
+
+      console.log('📊 Step data retrieved:', stepData);
+
+      // Verify step belongs to same class as session
+      const { data: sessionData, error: sessionError } = await supabase
+        .from('presentation_sessions')
+        .select('class_id, module_id, current_module_id')
+        .eq('id', this.currentSession.id)
+        .single();
+
+      if (sessionError || !sessionData) {
+        throw new Error(`Session not found: ${sessionError?.message || 'Unknown error'}`);
+      }
+
+      const sessionClassId = sessionData.class_id;
+      const stepClassId = stepData.modules.class_id;
+
+      if (sessionClassId !== stepClassId) {
+        throw new Error('Step does not belong to the same class as the session');
+      }
+
+      // Update session to point to new step
+      // Note: Since current_step_id column doesn't exist yet, we'll use session_name 
+      // to track the current step and trigger real-time updates
+      const stepInfo = `Step ${stepData.step_number}: ${stepData.title}`;
+      const { error: updateError } = await supabase
+        .from('presentation_sessions')
+        .update({
+          // current_step_id: stepId, // Column doesn't exist yet, skip for now
+          current_module_id: stepData.module_id,
+          module_id: stepData.module_id, // Keep for backward compatibility
+          total_slides: totalSlides,
+          current_slide: startSlide,
+          session_name: stepInfo, // Use session_name to track current step for now
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', this.currentSession.id);
+
+      if (updateError) throw updateError;
+
+      // Reset all participants to be in sync with new step
+      const { error: participantsError } = await supabase
+        .from('session_participants')
+        .update({
+          last_seen_slide: startSlide,
+          is_synced: true,
+          last_activity: new Date().toISOString()
+        })
+        .eq('session_id', this.currentSession.id);
+
+      if (participantsError) {
+        console.warn('Warning: Could not update participants sync status:', participantsError);
+      }
+
+      console.log('✅ Step switch successful');
+
+      // Update local session state
+      this.currentSession.current_step_id = stepId;
+      this.currentSession.current_module_id = stepData.module_id;
+      this.currentSession.module_id = stepData.module_id;
+      this.currentSession.total_slides = totalSlides;
+      this.currentSession.current_slide = startSlide;
+
+      this.syncStatus = {
+        ...this.syncStatus,
+        currentSlide: startSlide,
+        totalSlides: totalSlides
+      };
+
+      // Notify listeners about the step switch
+      this.callbacks.onSlideChange?.(startSlide);
+      this.callbacks.onSyncStatusChange?.(this.syncStatus);
+
+      console.log('🎯 Step switch completed - now presenting step:', stepId);
+      return true;
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : (error as any)?.message || String(error);
+      console.error('switchToStep error:', error);
+      this.callbacks.onError?.(`Failed to switch steps: ${errorMessage}`);
+      return false;
+    }
+  }
+
+  /**
+   * Get the current module being presented in the session
+   */
+  async getCurrentSessionModule(): Promise<{
+    moduleId: string;
+    moduleTitle: string;
+    stepNumber: number;
+    totalSlides: number;
+    currentSlide: number;
+  } | null> {
+    if (!this.currentSession?.id) {
+      return null;
+    }
+
+    try {
+      const { data, error } = await supabase.rpc('get_session_current_module', {
+        p_session_id: this.currentSession.id
+      });
+
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        const moduleInfo = data[0];
+        return {
+          moduleId: moduleInfo.module_id,
+          moduleTitle: moduleInfo.module_title,
+          stepNumber: moduleInfo.step_number,
+          totalSlides: moduleInfo.total_slides,
+          currentSlide: moduleInfo.current_slide
+        };
+      }
+
+      return null;
+    } catch (error) {
+      console.error('getCurrentSessionModule error:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Find and join active course session for a class (Student helper)
+   */
+  async findAndJoinActiveCourseSession(classId: string): Promise<boolean> {
+    try {
+      console.log('🔍 findAndJoinActiveCourseSession called for class:', classId);
+      
+      const { data: sessions, error: sessionError } = await supabase
+        .from('presentation_sessions')
+        .select('*')
+        .eq('class_id', classId)
+        .eq('is_active', true);
+
+      console.log('📊 Active course sessions found:', sessions);
+      console.log('❌ Session query error:', sessionError);
+
+      if (!sessions || sessions.length === 0) {
+        console.log('❌ No active course sessions found for class');
+        return false; // No active session found
+      }
+
+      console.log('🎯 Attempting to join course session:', sessions[0].id);
+      const joinResult = await this.joinSession(sessions[0].id);
+      console.log('🔗 Join course session result:', joinResult);
+      
+      return joinResult;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : (error as any)?.message || String(error);
+      console.error('findAndJoinActiveCourseSession error:', error);
+      this.callbacks.onError?.(`Failed to find active course session: ${errorMessage}`);
+      return false;
+    }
+  }
+
+  /**
    * Join an existing presentation session (Student)
    */
   async joinSession(sessionId: string): Promise<boolean> {
-    console.log('🔗 joinSession called with sessionId:', sessionId, 'userId:', this.userId);
-    
     if (!this.userId) {
-      console.log('❌ User not authenticated');
       this.callbacks.onError?.('User not authenticated');
       return false;
     }
 
     try {
-      // Get session details and verify student enrollment
-      console.log('📊 Fetching session data...');
+      console.log('🎯 joinSession called for sessionId:', sessionId);
+      console.log('👤 Student user ID:', this.userId);
+
+      // Get session details
       const { data: sessionData, error: sessionError } = await supabase
         .from('presentation_sessions')
-        .select(`
-          *,
-          modules!inner(
-            class_id,
-            classes!inner(id)
-          )
-        `)
+        .select('*')
         .eq('id', sessionId)
         .eq('is_active', true)
         .single();
 
-      console.log('📊 Session data received:', sessionData);
+      console.log('📊 Session data retrieved:', sessionData);
       console.log('❌ Session query error:', sessionError);
 
+      if (sessionError) throw sessionError;
       if (!sessionData) {
-        console.log('❌ No session data found');
         this.callbacks.onError?.('Session not found or not active');
         return false;
       }
 
-      // Verify student enrollment
-      console.log('👨‍🎓 Checking student enrollment for class:', sessionData.modules.class_id);
-      const { data: enrollmentData, error: enrollmentError } = await supabase
-        .from('enrollments')
-        .select('id')
-        .eq('user_id', this.userId)
-        .eq('class_id', sessionData.modules.class_id)
-        .eq('status', 'active')
-        .single();
+      // For course sessions, get class_id differently
+      let classId = sessionData.class_id;
+      if (!classId && sessionData.module_id) {
+        console.log('🔍 Course session without class_id, getting from module...');
+        const { data: moduleData } = await supabase
+          .from('modules')
+          .select('class_id')
+          .eq('id', sessionData.module_id)
+          .single();
+        
+        classId = moduleData?.class_id;
+        console.log('📊 Retrieved class_id from module:', classId);
+      }
 
-      console.log('📊 Enrollment data:', enrollmentData);
-      console.log('❌ Enrollment error:', enrollmentError);
+      if (!classId) {
+        console.log('❌ Could not determine class_id for session');
+        this.callbacks.onError?.('Unable to determine class for session');
+        return false;
+      }
 
-      if (!enrollmentData) {
-        console.log('❌ User not enrolled in class');
+             // Check if student is enrolled in the class
+       const { data: enrollmentData, error: enrollmentError } = await supabase
+         .from('enrollments')
+         .select('id')
+         .eq('class_id', classId)
+         .eq('user_id', this.userId)
+         .single();
+
+      console.log('📊 Enrollment check:', { enrollmentData, enrollmentError });
+
+      if (enrollmentError || !enrollmentData) {
         this.callbacks.onError?.('You are not enrolled in this class');
         return false;
       }
 
-      this.currentSession = sessionData;
-      this.isInstructor = false;
+      // Add/update participant record with enhanced logging
+      console.log('📝 Creating/updating participant record...');
+      const participantUpsertData = {
+        session_id: sessionId,
+        student_id: this.userId,
+        is_synced: true, // ⭐ CRITICAL: Students start in sync mode
+        last_seen_slide: sessionData.current_slide,
+        last_activity: new Date().toISOString()
+      };
+      console.log('📊 Participant upsert data:', participantUpsertData);
 
-      // Add/update participant record
       const { data: participantData, error: participantError } = await supabase
         .from('session_participants')
-        .upsert({
-          session_id: sessionId,
-          student_id: this.userId,
-          is_synced: true,
-          last_seen_slide: sessionData.current_slide,
-          last_activity: new Date().toISOString()
-        }, {
+        .upsert(participantUpsertData, {
           onConflict: 'session_id,student_id'
         })
         .select()
         .single();
 
+      console.log('📊 Participant upsert result:', { participantData, participantError });
       if (participantError) throw participantError;
 
       this.currentParticipant = participantData;
+      this.currentSession = sessionData;
+      this.isInstructor = false; // ⭐ CRITICAL: Set instructor flag
+      
+      // ⭐ CRITICAL: Set initial sync status correctly
       this.syncStatus = {
         ...this.syncStatus,
         isInstructor: false,
         currentSlide: sessionData.current_slide,
         totalSlides: sessionData.total_slides,
         sessionId: sessionData.id,
-        isSync: true,
+        isSync: true, // ⭐ Students start in sync mode
         isConnected: false // Will be set by realtime subscription callback
       };
 
-      // Set up realtime channel
+      console.log('✅ Initial sync status set:', this.syncStatus);
+      console.log('👤 Participant record created:', this.currentParticipant);
+
+      // Set up realtime channel AFTER setting all state
+      console.log('📡 Setting up real-time channel...');
       this.setupRealtimeChannel(sessionId);
 
+      // Notify callbacks
       this.callbacks.onSyncStatusChange?.(this.syncStatus);
       this.callbacks.onSlideChange?.(sessionData.current_slide);
+      
+      console.log('✅ joinSession completed successfully for student');
+      console.log('📊 Final state:', {
+        isInstructor: this.isInstructor,
+        isSync: this.syncStatus.isSync,
+        currentSlide: this.syncStatus.currentSlide,
+        sessionId: this.syncStatus.sessionId
+      });
       
       return true;
 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : (error as any)?.message || String(error);
-      console.error('joinSession error:', error);
+      console.error('❌ joinSession error:', error);
       this.callbacks.onError?.(`Failed to join session: ${errorMessage}`);
       return false;
     }
@@ -398,23 +749,59 @@ export class PresentationSyncManager {
     try {
       console.log('🔍 findAndJoinActiveSession called for module:', moduleId);
       
-      const { data: sessions, error: sessionError } = await supabase
+      // Step 1: Look for module-specific sessions first
+      const { data: moduleSessions, error: moduleSessionError } = await supabase
         .from('presentation_sessions')
         .select('*')
         .eq('module_id', moduleId)
         .eq('is_active', true);
 
-      console.log('📊 Active sessions found:', sessions);
-      console.log('❌ Session query error:', sessionError);
+      console.log('📊 Module-specific sessions found:', moduleSessions);
+      console.log('❌ Module session query error:', moduleSessionError);
 
-      if (!sessions || sessions.length === 0) {
-        console.log('❌ No active sessions found for module');
-        return false; // No active session found
+      if (moduleSessions && moduleSessions.length > 0) {
+        console.log('🎯 Found module session, attempting to join:', moduleSessions[0].id);
+        const joinResult = await this.joinSession(moduleSessions[0].id);
+        console.log('🔗 Module session join result:', joinResult);
+        return joinResult;
       }
 
-      console.log('🎯 Attempting to join session:', sessions[0].id);
-      const joinResult = await this.joinSession(sessions[0].id);
-      console.log('🔗 Join session result:', joinResult);
+      // Step 2: No module sessions found, look for course-level sessions
+      console.log('❌ No module-specific sessions found, checking for course-level sessions...');
+      
+      // First, get the class_id for this module
+      const { data: moduleData, error: moduleError } = await supabase
+        .from('modules')
+        .select('class_id')
+        .eq('id', moduleId)
+        .single();
+
+      if (moduleError || !moduleData) {
+        console.log('❌ Failed to get class_id for module:', moduleError);
+        return false;
+      }
+
+      console.log('🏫 Module belongs to class:', moduleData.class_id);
+
+      // Now look for active course-level sessions for this class
+      const { data: courseSessions, error: courseSessionError } = await supabase
+        .from('presentation_sessions')
+        .select('*')
+        .eq('class_id', moduleData.class_id)
+        .eq('is_active', true)
+        .is('module_id', null); // Course sessions have module_id = NULL
+
+      console.log('📊 Course-level sessions found:', courseSessions);
+      console.log('❌ Course session query error:', courseSessionError);
+
+      if (!courseSessions || courseSessions.length === 0) {
+        console.log('❌ No active course sessions found for class');
+        return false;
+      }
+
+      console.log('🎯 Found course session, attempting to join:', courseSessions[0].id);
+      const joinResult = await this.joinSession(courseSessions[0].id);
+      console.log('🔗 Course session join result:', joinResult);
       
       return joinResult;
     } catch (error) {
@@ -430,6 +817,11 @@ export class PresentationSyncManager {
    */
   private async setupRealtimeChannel(sessionId: string): Promise<void> {
     console.log('🔗 setupRealtimeChannel called for sessionId:', sessionId);
+    console.log('👤 Current user state:', {
+      isInstructor: this.isInstructor,
+      userId: this.userId,
+      sessionId: this.currentSession?.id
+    });
     
     // Remove existing channel if any
     if (this.channel) {
@@ -450,6 +842,12 @@ export class PresentationSyncManager {
         },
         (payload) => {
           console.log('📡 Realtime session update received:', payload);
+          console.log('🔍 Payload details:', {
+            eventType: payload.eventType,
+            new: payload.new,
+            old: payload.old,
+            timestamp: new Date().toISOString()
+          });
           this.handleSessionUpdate(payload.new as PresentationSession);
         }
       )
@@ -468,10 +866,24 @@ export class PresentationSyncManager {
       )
       .subscribe((status) => {
         console.log('📡 Realtime subscription status:', status);
+        console.log('🔍 Subscription details:', {
+          status,
+          sessionId,
+          channelName: `presentation_session_${sessionId}`,
+          timestamp: new Date().toISOString(),
+          isInstructor: this.isInstructor,
+          userId: this.userId
+        });
         const isConnected = status === 'SUBSCRIBED';
         this.syncStatus.isConnected = isConnected;
         console.log('🔗 Setting isConnected to:', isConnected);
         this.callbacks.onSyncStatusChange?.(this.syncStatus);
+        
+        if (isConnected) {
+          console.log('✅ Real-time channel successfully connected!');
+        } else {
+          console.log('❌ Real-time channel connection failed or disconnected');
+        }
       });
 
     console.log('✅ Realtime channel setup complete');
@@ -488,8 +900,25 @@ export class PresentationSyncManager {
    */
   private handleSessionUpdate(session: PresentationSession): void {
     console.log('🔄 handleSessionUpdate called with session:', session);
-    console.log('📊 Session is_active:', session.is_active, 'current_slide:', session.current_slide);
-    console.log('👤 Current user - isInstructor:', this.isInstructor, 'isSync:', this.syncStatus.isSync);
+    console.log('📊 Session details:', {
+      sessionId: session.id,
+      isActive: session.is_active,
+      currentSlide: session.current_slide,
+      totalSlides: session.total_slides,
+      moduleId: session.module_id,
+      classId: session.class_id,
+      currentModuleId: session.current_module_id,
+      instructorId: session.instructor_id,
+      sessionName: session.session_name // Add session_name to logging
+    });
+    console.log('👤 Current user state:', {
+      isInstructor: this.isInstructor,
+      userId: this.userId,
+      isSync: this.syncStatus.isSync,
+      isConnected: this.syncStatus.isConnected,
+      currentParticipant: !!this.currentParticipant
+    });
+    console.log('📊 Previous sync status:', this.syncStatus);
     
     if (!session.is_active) {
       console.log('❌ Session is not active, ending session');
@@ -497,6 +926,96 @@ export class PresentationSyncManager {
       this.callbacks.onSessionEnd?.();
       this.disconnect();
       return;
+    }
+
+    // Check for module switch in course sessions (for students)
+    const previousModuleId = this.currentSession?.module_id || this.currentSession?.current_module_id;
+    const newModuleId = session.module_id || session.current_module_id;
+    
+    const hasModuleSwitched = !this.isInstructor && 
+                             previousModuleId && 
+                             newModuleId && 
+                             previousModuleId !== newModuleId;
+
+    if (hasModuleSwitched) {
+      console.log('🔄 Module switch detected!');
+      console.log('  - Previous module:', previousModuleId);
+      console.log('  - New module:', newModuleId);
+      console.log('  - New slide:', session.current_slide);
+      
+      // Update session reference first
+      this.currentSession = session;
+      this.syncStatus.currentSlide = session.current_slide;
+      this.syncStatus.totalSlides = session.total_slides;
+      
+      // Notify student about module switch so they can navigate to new step
+      if (this.callbacks.onModuleSwitch) {
+        console.log('✅ Calling onModuleSwitch to navigate student to new module');
+        this.callbacks.onModuleSwitch(newModuleId, session.current_slide);
+      } else {
+        console.log('⚠️ No onModuleSwitch callback available');
+      }
+      
+      // Update sync status
+      this.callbacks.onSyncStatusChange?.(this.syncStatus);
+      return; // Exit early since we're handling the module switch
+    }
+
+    // Check for step switch within the same module (for students)
+    // Since current_step_id doesn't exist yet, we'll detect step changes through session_name
+    const previousSessionName = this.currentSession?.session_name;
+    const newSessionName = session.session_name;
+
+    console.log('🔍 Step switch detection check:', {
+      isInstructor: this.isInstructor,
+      previousSessionName,
+      newSessionName,
+      sessionNameChanged: previousSessionName !== newSessionName,
+      includesStep: newSessionName?.includes('Step '),
+      allConditionsMet: !this.isInstructor &&
+                       previousSessionName &&
+                       newSessionName &&
+                       previousSessionName !== newSessionName &&
+                       newSessionName?.includes('Step ')
+    });
+
+    const hasStepSwitched = !this.isInstructor &&
+                             previousSessionName &&
+                             newSessionName &&
+                             previousSessionName !== newSessionName &&
+                             newSessionName?.includes('Step '); // Only consider step-related session names
+
+    if (hasStepSwitched) {
+      console.log('🔄 Step switch detected via session_name!');
+      console.log('  - Previous session name:', previousSessionName);
+      console.log('  - New session name:', newSessionName);
+      console.log('  - New slide:', session.current_slide);
+      
+      // Extract step number from session name (e.g., "Step 1: Introduction" -> 1)
+      const stepMatch = newSessionName?.match(/Step (\d+):/);
+      if (stepMatch) {
+        const stepNumber = parseInt(stepMatch[1]);
+        console.log('  - Detected step number:', stepNumber);
+        
+        // Update session reference first
+        this.currentSession = session;
+        this.syncStatus.currentSlide = session.current_slide;
+        this.syncStatus.totalSlides = session.total_slides;
+        
+        // For now, we'll use the session_name to trigger navigation
+        // In a real implementation, we'd need to map step numbers to step IDs
+        // For the demo, we'll just trigger the step switch callback with the session name
+        if (this.callbacks.onStepSwitch) {
+          console.log('✅ Calling onStepSwitch to navigate student to new step');
+          this.callbacks.onStepSwitch(newSessionName, session.current_slide);
+        } else {
+          console.log('⚠️ No onStepSwitch callback available');
+        }
+        
+        // Update sync status
+        this.callbacks.onSyncStatusChange?.(this.syncStatus);
+        return; // Exit early since we're handling the step switch
+      }
     }
 
     this.currentSession = session;
@@ -517,12 +1036,17 @@ export class PresentationSyncManager {
       if (this.currentParticipant) {
         console.log('📝 Updating participant last seen slide to:', session.current_slide);
         this.updateParticipantSlide(session.current_slide);
+      } else {
+        console.log('⚠️ Student has no currentParticipant record - cannot update last seen slide');
       }
     } else {
-      console.log('❌ Not calling onSlideChange - isInstructor:', this.isInstructor, 'isSync:', this.syncStatus.isSync);
+      console.log('❌ Not calling onSlideChange - conditions not met:');
+      console.log('  - isInstructor:', this.isInstructor);
+      console.log('  - isSync:', this.syncStatus.isSync);
+      console.log('  - Student should be in sync mode but is not');
     }
 
-    console.log('🔄 Calling onSyncStatusChange with status:', this.syncStatus);
+    console.log('🔄 Calling onSyncStatusChange with updated status:', this.syncStatus);
     this.callbacks.onSyncStatusChange?.(this.syncStatus);
   }
 
@@ -796,7 +1320,7 @@ export class PresentationSyncManager {
   }
 
   /**
-   * Get detailed debug info about current state
+   * Get debug information for troubleshooting
    */
   getDebugInfo() {
     return {
@@ -804,10 +1328,139 @@ export class PresentationSyncManager {
       currentSessionId: this.currentSession?.id,
       isInstructor: this.isInstructor,
       userId: this.userId,
-      isConnected: this.syncStatus.isConnected,
-      channelExists: !!this.channel,
-      syncStatus: this.syncStatus
+      currentSession: this.currentSession,
+      currentParticipant: this.currentParticipant,
+      syncStatus: this.syncStatus,
+      isChannelConnected: this.channel?.state === 'joined',
+      channelState: this.channel?.state,
+      participantCount: this.participants.length,
+      participants: this.participants
     };
+  }
+
+  /**
+   * Comprehensive diagnostic check for sync issues
+   */
+  async diagnoseSyncIssues(): Promise<{
+    status: string;
+    issues: string[];
+    recommendations: string[];
+    details: any;
+  }> {
+    const issues: string[] = [];
+    const recommendations: string[] = [];
+    const details: any = {};
+
+    // Check authentication
+    const { data: { user } } = await supabase.auth.getUser();
+    details.user = user;
+    if (!user) {
+      issues.push('User not authenticated');
+      recommendations.push('Ensure user is logged in');
+    }
+
+    // Check session existence
+    details.currentSession = this.currentSession;
+    if (!this.currentSession) {
+      issues.push('No active session');
+      recommendations.push('Join a session first');
+    }
+
+    // Check real-time connection
+    details.channelState = this.channel?.state;
+    details.isConnected = this.syncStatus.isConnected;
+    if (!this.syncStatus.isConnected) {
+      issues.push('Real-time channel not connected');
+      recommendations.push('Check internet connection and Supabase real-time status');
+    }
+
+    // Check sync status for students
+    if (!this.isInstructor) {
+      details.isSync = this.syncStatus.isSync;
+      details.currentParticipant = this.currentParticipant;
+      
+      if (!this.syncStatus.isSync) {
+        issues.push('Student sync mode disabled');
+        recommendations.push('Enable sync mode or manually catch up to instructor');
+      }
+      
+      if (!this.currentParticipant) {
+        issues.push('Student not registered as participant');
+        recommendations.push('Re-join the session');
+      }
+    }
+
+    // Check session activity
+    if (this.currentSession && !this.currentSession.is_active) {
+      issues.push('Session is not active');
+      recommendations.push('Session may have ended');
+    }
+
+    const status = issues.length === 0 ? 'healthy' : 'issues_detected';
+    
+    return {
+      status,
+      issues,
+      recommendations,
+      details: {
+        ...details,
+        debugInfo: this.getDebugInfo(),
+        timestamp: new Date().toISOString()
+      }
+    };
+  }
+
+  /**
+   * Force sync status refresh for troubleshooting
+   */
+  async forceSyncRefresh(): Promise<boolean> {
+    console.log('🔄 forceSyncRefresh called for troubleshooting');
+    
+    if (!this.currentSession) {
+      console.log('❌ No active session to refresh');
+      return false;
+    }
+
+    try {
+      // Re-fetch session data from database
+      const { data: sessionData, error } = await supabase
+        .from('presentation_sessions')
+        .select('*')
+        .eq('id', this.currentSession.id)
+        .single();
+
+      if (error) throw error;
+      if (!sessionData) {
+        console.log('❌ Session not found in database');
+        return false;
+      }
+
+      console.log('📊 Fresh session data from database:', sessionData);
+      
+      // Update local state
+      this.handleSessionUpdate(sessionData);
+      
+      // For students, also refresh participant data
+      if (!this.isInstructor && this.userId) {
+        const { data: participantData } = await supabase
+          .from('session_participants')
+          .select('*')
+          .eq('session_id', this.currentSession.id)
+          .eq('student_id', this.userId)
+          .single();
+          
+        if (participantData) {
+          console.log('📊 Fresh participant data:', participantData);
+          this.currentParticipant = participantData;
+          this.syncStatus.isSync = participantData.is_synced;
+        }
+      }
+
+      return true;
+    } catch (error) {
+      console.error('❌ forceSyncRefresh error:', error);
+      return false;
+    }
   }
 
   /**

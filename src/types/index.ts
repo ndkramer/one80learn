@@ -10,6 +10,38 @@ export type DbModuleProgress = Tables<'module_progress'>;
 export type DbCourseEvaluation = Tables<'course_evaluations'>;
 export type DbStorageObject = Tables<'storage_objects'>;
 
+// New step-related database types (to be added after migration)
+export interface DbStep {
+  id: string;
+  module_id: string;
+  step_number: number;
+  title: string;
+  description: string;
+  slide_pdf_url?: string | null;
+  content?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbStepCompletion {
+  id: string;
+  user_id: string;
+  step_id: string;
+  completed: boolean;
+  completed_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbStepNote {
+  id: string;
+  user_id: string;
+  step_id: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+}
+
 // Application types derived from database types
 export interface User {
   id: string;
@@ -35,6 +67,7 @@ export interface Class extends Omit<DbClass, 'schedule_data' | 'thumbnail_url'> 
   modules: Module[];
 }
 
+// Updated Module interface to support steps
 export interface Module extends Omit<DbModule, 'slide_pdf_url'> {
   slideUrl?: string;
   slide_pdf_url?: string;
@@ -42,12 +75,67 @@ export interface Module extends Omit<DbModule, 'slide_pdf_url'> {
   supports_sync?: boolean;
   pdf_total_pages?: number;
   presentation_title?: string;
+  steps: Step[]; // NEW: Array of steps in this module
+  progress?: ModuleProgress; // Progress summary for the current user
+}
+
+// NEW: Step interface
+export interface Step {
+  id: string;
+  moduleId: string;
+  stepNumber: number;
+  title: string;
+  description: string;
+  slideUrl?: string;
+  slide_pdf_url?: string;
+  content?: string;
+  createdAt: string;
+  updatedAt: string;
+  completion?: StepCompletion; // Completion status for current user
+  note?: StepNote; // User's note for this step
+}
+
+// NEW: Step completion tracking
+export interface StepCompletion {
+  id: string;
+  userId: string;
+  stepId: string;
+  completed: boolean;
+  completedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// NEW: Step-specific notes (replaces module-level notes)
+export interface StepNote {
+  id: string;
+  userId: string;
+  stepId: string;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// NEW: Module progress summary based on step completion
+export interface ModuleProgress {
+  moduleId: string;
+  totalSteps: number;
+  completedSteps: number;
+  progressPercentage: number;
+  isCompleted: boolean;
+  lastAccessedStep?: number;
+  nextStep?: {
+    stepId: string;
+    stepNumber: number;
+    title: string;
+  };
 }
 
 export interface Resource extends DbResource {
   // All properties already match the database schema
 }
 
+// DEPRECATED: Module-level notes (kept for backward compatibility during migration)
 export interface Note extends Omit<DbNote, 'user_id' | 'module_id'> {
   userId: string;
   moduleId: string;
@@ -88,6 +176,44 @@ export type ResourceInsert = Database['public']['Tables']['resources']['Insert']
 export type ResourceUpdate = Database['public']['Tables']['resources']['Update'];
 export type NoteInsert = Database['public']['Tables']['notes']['Insert'];
 export type NoteUpdate = Database['public']['Tables']['notes']['Update'];
+
+// NEW: Step-related insert/update types (to be added after migration)
+export interface StepInsert {
+  module_id: string;
+  step_number: number;
+  title: string;
+  description?: string;
+  slide_pdf_url?: string;
+  content?: string;
+}
+
+export interface StepUpdate {
+  step_number?: number;
+  title?: string;
+  description?: string;
+  slide_pdf_url?: string;
+  content?: string;
+}
+
+export interface StepCompletionInsert {
+  user_id: string;
+  step_id: string;
+  completed?: boolean;
+}
+
+export interface StepCompletionUpdate {
+  completed?: boolean;
+}
+
+export interface StepNoteInsert {
+  user_id: string;
+  step_id: string;
+  content?: string;
+}
+
+export interface StepNoteUpdate {
+  content?: string;
+}
 
 // Function types for admin operations
 export type CheckIsSuperAdminFunction = Database['public']['Functions']['check_is_super_admin'];

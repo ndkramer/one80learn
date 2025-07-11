@@ -9,6 +9,7 @@
 CREATE TABLE presentation_sessions (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
   module_id uuid REFERENCES modules(id) ON DELETE CASCADE NOT NULL,
+  current_step_id uuid REFERENCES steps(id) ON DELETE CASCADE, -- Track current step
   instructor_id uuid REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
   current_slide integer DEFAULT 1 NOT NULL,
   total_slides integer NOT NULL CHECK (total_slides > 0),

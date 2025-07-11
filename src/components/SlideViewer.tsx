@@ -12,9 +12,10 @@ interface SlideViewerProps {
   title: string;
   pdfUrl?: string;
   currentSlide?: number; // Add prop to control which slide to display
+  onPdfLoad?: (numPages: number) => void; // Callback when PDF loads with total pages
 }
 
-const SlideViewer: React.FC<SlideViewerProps> = ({ title, pdfUrl, currentSlide }) => {
+const SlideViewer: React.FC<SlideViewerProps> = ({ title, pdfUrl, currentSlide, onPdfLoad }) => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [pdfFile, setPdfFile] = useState<string | null>(null);
   const [numPages, setNumPages] = useState<number>(0);
@@ -84,6 +85,11 @@ const SlideViewer: React.FC<SlideViewerProps> = ({ title, pdfUrl, currentSlide }
     setPageNumber(1);
     setIsLoading(false);
     setError(null);
+    
+    // Call the parent callback with total pages
+    if (onPdfLoad) {
+      onPdfLoad(numPages);
+    }
   };
 
   const onDocumentLoadError = (error: Error) => {

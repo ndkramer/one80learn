@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '../../utils/supabase';
 import Button from '../../components/Button';
 import Alert from '../../components/Alert';
-import { Library, Search, Plus, Pencil, Trash2, X, ArrowLeft, ArrowUp, ArrowDown, GripVertical, Link as LinkIcon, FileSpreadsheet, FileVideo, FileText, Upload, File as FilePdf } from 'lucide-react';
+import { Library, Search, Plus, Pencil, Trash2, X, ArrowLeft, ArrowUp, ArrowDown, GripVertical, Link as LinkIcon, FileSpreadsheet, FileVideo, FileText, Upload, File as FilePdf, Presentation } from 'lucide-react';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import { Resource } from '../../types';
 
@@ -16,6 +16,7 @@ interface Module {
   order: number;
   created_at: string;
   content?: string;
+  supports_sync?: boolean;
   resources?: any[];
 }
 
@@ -44,7 +45,8 @@ const ModuleAdmin: React.FC = () => {
     title: '',
     description: '',
     slide_pdf_url: '',
-    content: ''
+    content: '',
+    supports_sync: false
   });
   const [uploadedSlidePdf, setUploadedSlidePdf] = useState<File | null>(null);
   const [isSlidePdfDragOver, setIsSlidePdfDragOver] = useState(false);
@@ -130,7 +132,8 @@ const ModuleAdmin: React.FC = () => {
         title: editingModule.title,
         description: editingModule.description,
         slide_pdf_url: editingModule.slide_pdf_url || '',
-        content: editingModule.content || ''
+        content: editingModule.content || '',
+        supports_sync: editingModule.supports_sync || false
       });
       setUploadedSlidePdf(null);
     } else {
@@ -138,7 +141,8 @@ const ModuleAdmin: React.FC = () => {
         title: '',
         description: '',
         slide_pdf_url: '',
-        content: ''
+        content: '',
+        supports_sync: false
       });
       setUploadedSlidePdf(null);
     }
@@ -274,7 +278,8 @@ const ModuleAdmin: React.FC = () => {
           description: formData.description,
           slide_pdf_url,
           order: newOrder,
-          content: formData.content
+          content: formData.content,
+          supports_sync: formData.supports_sync
         }])
         .select()
         .single();
@@ -287,7 +292,8 @@ const ModuleAdmin: React.FC = () => {
         title: '',
         description: '',
         slide_pdf_url: '',
-        content: ''
+        content: '',
+        supports_sync: false
       });
       loadCourseAndModules();
     } catch (err) {
@@ -317,7 +323,8 @@ const ModuleAdmin: React.FC = () => {
           title: formData.title,
           description: formData.description,
           slide_pdf_url,
-          content: formData.content
+          content: formData.content,
+          supports_sync: formData.supports_sync
         })
         .eq('id', editingModule.id);
 
@@ -609,6 +616,25 @@ const ModuleAdmin: React.FC = () => {
                     This content will be available to students as supplementary material
                   </p>
                 </div>
+
+                {/* Presentation Sync Toggle */}
+                <div className="flex items-center space-x-3 p-4 bg-gray-50 rounded-lg">
+                  <input
+                    type="checkbox"
+                    id="supports_sync"
+                    checked={formData.supports_sync}
+                    onChange={(e) => setFormData(prev => ({ ...prev, supports_sync: e.target.checked }))}
+                    className="h-4 w-4 text-[#F98B3D] focus:ring-[#F98B3D] border-gray-300 rounded"
+                  />
+                  <div className="flex-1">
+                    <label htmlFor="supports_sync" className="text-sm font-medium text-gray-700 cursor-pointer">
+                      Enable Presentation Sync
+                    </label>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Allows instructors to create synchronized presentation sessions for this module. Requires a PDF to be uploaded.
+                    </p>
+                  </div>
+                </div>
               </form>
             </div>
 
@@ -684,9 +710,17 @@ const ModuleAdmin: React.FC = () => {
                 <div className="flex-1">
                   <div className="flex items-center justify-between">
                     <div>
-                      <h3 className="text-base font-medium text-gray-900 mb-1">
-                        {module.title}
-                      </h3>
+                      <div className="flex items-center space-x-2 mb-1">
+                        <h3 className="text-base font-medium text-gray-900">
+                          {module.title}
+                        </h3>
+                        {module.supports_sync && (
+                          <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-[#F98B3D] text-white" title="Presentation sync enabled">
+                            <Presentation size={12} className="mr-1" />
+                            Sync
+                          </span>
+                        )}
+                      </div>
                       <p className="text-sm text-gray-500 line-clamp-1">
                         {module.description}
                       </p>
@@ -731,8 +765,15 @@ const ModuleAdmin: React.FC = () => {
                         <Pencil size={16} />
                       </button>
                       <button
+                        onClick={() => navigate(`/admin/courses/${courseId}/modules/${module.id}/steps`)}
+                        className="text-[#F98B3D] hover:text-[#e07a2c]"
+                        title="Manage steps"
+                      >
+                        <FileText size={16} />
+                      </button>
+                      <button
                         onClick={() => navigate(`/admin/courses/${courseId}/modules/${module.id}/resources`)}
-                        className="text-[#F98B3D] hover:text-[#e07a2c] ml-3"
+                        className="text-[#F98B3D] hover:text-[#e07a2c]"
                         title="Manage resources"
                       >
                         <Library size={16} />

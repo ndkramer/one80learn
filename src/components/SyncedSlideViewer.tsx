@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { 
   Maximize2, 
@@ -37,6 +37,8 @@ interface SyncedSlideViewerProps {
   moduleId: string;
   pdfUrl?: string;
   currentSlide?: number; // Add prop to control which slide to display
+  onPdfLoad?: (numPages: number) => void; // Callback when PDF loads with total pages
+  onStepSwitch?: (stepId: string) => void; // Add callback for step switching
 }
 
 interface SessionInfo {
@@ -51,7 +53,9 @@ const SyncedSlideViewer: React.FC<SyncedSlideViewerProps> = ({
   title, 
   moduleId, 
   pdfUrl,
-  currentSlide 
+  currentSlide,
+  onPdfLoad,
+  onStepSwitch
 }) => {
   // Standard slide viewer state
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -75,7 +79,17 @@ const SyncedSlideViewer: React.FC<SyncedSlideViewerProps> = ({
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
 
   const [autoJoinAttempted, setAutoJoinAttempted] = useState(false);
+  // Auto-join retry state
+  const [retryAttempts, setRetryAttempts] = useState(0);
+  const [maxRetryAttempts] = useState(20); // Try for ~3 minutes (20 * 10s = 200s)
+  const retryIntervalRef = useRef<NodeJS.Timeout>();
+
+  // Manual slide override (when student navigates independently)
   const [manualSlideOverride, setManualSlideOverride] = useState(false);
+  
+  // Diagnostic state
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [diagnosticResults, setDiagnosticResults] = useState<any>(null);
 
   // Initialize PDF loading
   useEffect(() => {
@@ -101,6 +115,92 @@ const SyncedSlideViewer: React.FC<SyncedSlideViewerProps> = ({
       setIsLoading(false);
     }
   }, [pdfUrl]);
+
+  // Function to attempt auto-join (can be called multiple times)
+  const attemptAutoJoin = async (): Promise<boolean> => {
+    try {
+      console.log('🔍 Attempting auto-join for module:', moduleId);
+      
+      // Check if user is instructor for this module first
+      const isInstructor = await syncManager.isModuleInstructor(moduleId);
+      console.log('👤 User instructor status:', isInstructor);
+      
+      if (isInstructor) {
+        console.log('👨‍🏫 User is instructor, skipping auto-join');
+        return false;
+      }
+
+      console.log('👨‍🎓 User is student, attempting auto-join...');
+      let joined = await syncManager.findAndJoinActiveSession(moduleId);
+      console.log('🔗 Module auto-join result:', joined);
+      
+      // If module-specific join failed, try course-level join as fallback
+      if (!joined) {
+        console.log('🔍 Module auto-join failed, trying course-level session...');
+        try {
+          // Get class ID from current URL
+          const currentPath = window.location.pathname;
+          const classIdMatch = currentPath.match(/\/classes\/([^\/]+)\//); 
+          
+          if (classIdMatch) {
+            const classId = classIdMatch[1];
+            console.log('🎓 Attempting course-level auto-join for class:', classId);
+            joined = await syncManager.findAndJoinActiveCourseSession(classId);
+            console.log('🔗 Course-level auto-join result:', joined);
+          }
+        } catch (courseJoinError) {
+          console.log('❌ Course-level auto-join failed:', courseJoinError);
+        }
+      } 
+      
+      if (joined) {
+        console.log('✅ Student successfully joined session');
+        setRetryAttempts(0); // Reset retry counter on success
+        return true;
+      } else {
+        console.log('❌ No active session found');
+        return false;
+      }
+    } catch (error) {
+      console.error('❌ Auto-join error:', error);
+      return false;
+    }
+  };
+
+  // Set up periodic auto-join retry for students
+  useEffect(() => {
+    // Only set up retry logic if:
+    // 1. User is not connected to any session
+    // 2. We haven't exceeded max retry attempts
+    // 3. PDF is loaded (numPages > 0)
+    if (!syncStatus.isConnected && retryAttempts < maxRetryAttempts && numPages > 0) {
+      console.log(`🔄 Setting up auto-join retry #${retryAttempts + 1}/${maxRetryAttempts} in 10 seconds...`);
+      
+      retryIntervalRef.current = setTimeout(async () => {
+        console.log(`🎯 Auto-join retry attempt #${retryAttempts + 1}`);
+        
+        const success = await attemptAutoJoin();
+        if (!success) {
+          setRetryAttempts(prev => prev + 1);
+        }
+      }, 10000); // Retry every 10 seconds
+    } else if (syncStatus.isConnected) {
+      // Connected - stop retrying
+      console.log('✅ Student connected - stopping auto-join retries');
+      if (retryIntervalRef.current) {
+        clearTimeout(retryIntervalRef.current);
+      }
+      setRetryAttempts(0);
+    } else if (retryAttempts >= maxRetryAttempts) {
+      console.log('❌ Max auto-join attempts reached - stopping retries');
+    }
+
+    return () => {
+      if (retryIntervalRef.current) {
+        clearTimeout(retryIntervalRef.current);
+      }
+    };
+  }, [syncStatus.isConnected, retryAttempts, maxRetryAttempts, numPages, moduleId]);
 
   // Initialize sync manager
   useEffect(() => {
@@ -145,43 +245,54 @@ const SyncedSlideViewer: React.FC<SyncedSlideViewerProps> = ({
           if (errorMsg.includes('Failed to join') || errorMsg.includes('Session not found')) {
             setError(errorMsg);
           }
+        },
+        onModuleSwitch: (newModuleId, startSlide) => {
+          console.log('🔄 Module switch detected! Navigating to new module:', newModuleId, 'at slide:', startSlide);
+          
+          // Navigate to the new module/step URL
+          // We need to construct the URL based on the current URL pattern
+          const currentPath = window.location.pathname;
+          
+          // Extract class ID from current URL (pattern: /classes/:classId/modules/:moduleId)
+          const classIdMatch = currentPath.match(/\/classes\/([^\/]+)\//);
+          if (classIdMatch) {
+            const classId = classIdMatch[1];
+            const newPath = `/classes/${classId}/modules/${newModuleId}`;
+            
+            console.log('🔄 Navigating student from', currentPath, 'to', newPath);
+            window.location.href = newPath;
+          } else {
+            console.log('⚠️ Could not extract class ID from current path:', currentPath);
+          }
+        },
+        onStepSwitch: (stepIdentifier, startSlide) => {
+          console.log('🔄 Step switch detected! stepIdentifier:', stepIdentifier, 'startSlide:', startSlide);
+          
+          if (onStepSwitch) {
+            console.log('✅ Calling parent onStepSwitch callback');
+            onStepSwitch(stepIdentifier);
+          } else {
+            console.log('⚠️ No parent onStepSwitch callback available');
+          }
         }
       };
 
-      syncManager.callbacks = callbacks;
+      // Use the public method to set callbacks
+      Object.assign(syncManager, { callbacks });
 
-      // Try to auto-join active session for this module (only for students)
-      console.log('🤔 Checking auto-join conditions - autoJoinAttempted:', autoJoinAttempted, 'numPages:', numPages);
-      
+      // Try initial auto-join for students
       if (!autoJoinAttempted && numPages > 0) {
-        console.log('✅ Auto-join conditions met, proceeding...');
+        console.log('✅ Initial auto-join conditions met, proceeding...');
         setAutoJoinAttempted(true);
-        try {
-          console.log('🔍 Student auto-join check starting for module:', moduleId);
-          
-          // Check if user is instructor for this module first
-          const isInstructor = await syncManager.isModuleInstructor(moduleId);
-          console.log('👤 User instructor status:', isInstructor);
-          
-          if (!isInstructor) {
-            console.log('👨‍🎓 User is student, attempting auto-join...');
-            const joined = await syncManager.findAndJoinActiveSession(moduleId);
-            console.log('🔗 Auto-join result:', joined);
-            
-            if (joined) {
-              console.log('✅ Student successfully joined session');
-            } else {
-              console.log('❌ No active session found or join failed');
-            }
-          } else {
-            console.log('👨‍🏫 User is instructor, skipping auto-join');
-          }
-        } catch (error) {
-          console.error('❌ Auto-join session error:', error);
-          // Don't show error to students for auto-join failures
+        
+        // Use the new retry-capable auto-join function
+        const success = await attemptAutoJoin();
+        if (!success) {
+          // If initial attempt fails, the periodic retry will take over
+          console.log('🔄 Initial auto-join failed - periodic retries will continue');
         }
       } else {
-        console.log('❌ Auto-join conditions not met - skipping auto-join');
+        console.log('❌ Initial auto-join conditions not met - skipping auto-join');
       }
     };
 
@@ -285,6 +396,11 @@ const SyncedSlideViewer: React.FC<SyncedSlideViewerProps> = ({
     setPageNumber(1);
     setIsLoading(false);
     setError(null);
+    
+    // Call the parent callback with total pages
+    if (onPdfLoad) {
+      onPdfLoad(numPages);
+    }
   };
 
   const onDocumentLoadError = (error: Error) => {
@@ -471,6 +587,26 @@ const SyncedSlideViewer: React.FC<SyncedSlideViewerProps> = ({
 
   const slideStatus = getSlideStatus();
 
+  // Diagnostic functions
+  const runDiagnostics = async () => {
+    console.log('🔍 Running sync diagnostics...');
+    const results = await syncManager.diagnoseSyncIssues();
+    setDiagnosticResults(results);
+    console.log('📊 Diagnostic results:', results);
+  };
+
+  const forceSyncRefresh = async () => {
+    console.log('🔄 Forcing sync refresh...');
+    const success = await syncManager.forceSyncRefresh();
+    if (success) {
+      console.log('✅ Sync refresh successful');
+      // Run diagnostics again to show updated state
+      await runDiagnostics();
+    } else {
+      console.log('❌ Sync refresh failed');
+    }
+  };
+
   return (
     <div className="relative h-full bg-gray-100">
       {/* Sync Status Banner */}
@@ -544,6 +680,117 @@ const SyncedSlideViewer: React.FC<SyncedSlideViewerProps> = ({
                 >
                   Catch Up
                 </Button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Session Info Banner - Enhanced with diagnostics */}
+      {sessionInfo && (
+        <div className="bg-blue-50 border border-blue-200 rounded-md p-3 mb-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <div className={`w-2 h-2 rounded-full ${syncStatus.isConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
+              <span className="text-sm font-medium text-blue-900">
+                {sessionInfo.sessionName}
+              </span>
+              <span className="text-xs text-blue-600">
+                {syncStatus.isSync ? '🔗 Synced' : '🔓 Free Navigation'}
+              </span>
+              {syncStatus.participantCount > 0 && (
+                <span className="text-xs text-blue-600">
+                  {syncStatus.participantCount} participants
+                </span>
+              )}
+            </div>
+            <div className="flex items-center space-x-2">
+              {/* Diagnostic toggle button */}
+              <button
+                onClick={() => setShowDiagnostics(!showDiagnostics)}
+                className="text-xs text-blue-600 hover:text-blue-800 underline"
+                title="Show diagnostic information"
+              >
+                {showDiagnostics ? 'Hide' : 'Debug'}
+              </button>
+              
+              <button
+                onClick={toggleSync}
+                className="text-xs bg-blue-100 hover:bg-blue-200 text-blue-800 px-2 py-1 rounded"
+                disabled={!syncStatus.sessionId}
+              >
+                {syncStatus.isSync ? 'Disable Sync' : 'Enable Sync'}
+              </button>
+              
+              {!syncStatus.isSync && (
+                <button
+                  onClick={catchUpToInstructor}
+                  className="text-xs bg-green-100 hover:bg-green-200 text-green-800 px-2 py-1 rounded"
+                  disabled={!syncStatus.sessionId}
+                >
+                  Catch Up
+                </button>
+              )}
+            </div>
+          </div>
+          
+          {/* Diagnostic panel */}
+          {showDiagnostics && (
+            <div className="mt-3 pt-3 border-t border-blue-200">
+              <div className="mb-3">
+                <button
+                  onClick={runDiagnostics}
+                  className="text-xs bg-purple-100 hover:bg-purple-200 text-purple-800 px-2 py-1 rounded mr-2"
+                >
+                  Run Diagnostics
+                </button>
+                <button
+                  onClick={forceSyncRefresh}
+                  className="text-xs bg-orange-100 hover:bg-orange-200 text-orange-800 px-2 py-1 rounded"
+                >
+                  Force Refresh
+                </button>
+              </div>
+              
+              {diagnosticResults && (
+                <div className="bg-white rounded p-3 text-xs">
+                  <div className="mb-2">
+                    <span className={`inline-block px-2 py-1 rounded text-white text-xs ${
+                      diagnosticResults.status === 'healthy' ? 'bg-green-500' : 'bg-red-500'
+                    }`}>
+                      {diagnosticResults.status === 'healthy' ? '✅ Healthy' : '⚠️ Issues Detected'}
+                    </span>
+                  </div>
+                  
+                  {diagnosticResults.issues.length > 0 && (
+                    <div className="mb-2">
+                      <strong className="text-red-600">Issues:</strong>
+                      <ul className="text-red-600 ml-4">
+                        {diagnosticResults.issues.map((issue: string, index: number) => (
+                          <li key={index}>• {issue}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  
+                  {diagnosticResults.recommendations.length > 0 && (
+                    <div className="mb-2">
+                      <strong className="text-blue-600">Recommendations:</strong>
+                      <ul className="text-blue-600 ml-4">
+                        {diagnosticResults.recommendations.map((rec: string, index: number) => (
+                          <li key={index}>• {rec}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  
+                  <details className="mt-2">
+                    <summary className="cursor-pointer text-gray-600">Technical Details</summary>
+                    <pre className="mt-1 text-xs bg-gray-100 p-2 rounded overflow-auto max-h-40">
+                      {JSON.stringify(diagnosticResults.details, null, 2)}
+                    </pre>
+                  </details>
+                </div>
               )}
             </div>
           )}

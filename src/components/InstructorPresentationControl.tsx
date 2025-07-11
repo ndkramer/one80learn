@@ -26,10 +26,15 @@ import Button from './Button';
 
 interface InstructorPresentationControlProps {
   moduleId: string;
+  classId: string; // Added for course-level sessions
   totalSlides: number;
   currentSlide: number;
   onSlideChange: (slide: number) => void;
   presentationTitle?: string;
+  stepNumber?: number; // Added to show current step
+  currentStepId?: string; // Added to know which step is currently active
+  onModuleSwitch?: (newModuleId: string) => void; // Callback when switching modules
+  onStepSwitch?: (stepId: string) => void; // Callback when switching steps within same module
 }
 
 interface ParticipantWithStatus extends SessionParticipant {
@@ -40,10 +45,15 @@ interface ParticipantWithStatus extends SessionParticipant {
 
 const InstructorPresentationControl: React.FC<InstructorPresentationControlProps> = ({
   moduleId,
+  classId,
   totalSlides,
   currentSlide,
   onSlideChange,
-  presentationTitle
+  presentationTitle,
+  stepNumber,
+  currentStepId,
+  onModuleSwitch,
+  onStepSwitch
 }) => {
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [syncManager] = useState(() => new PresentationSyncManager());
@@ -63,6 +73,13 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
   const [sessionStartTime, setSessionStartTime] = useState<Date | null>(null);
   const [autoAdvanceTimer, setAutoAdvanceTimer] = useState<number | null>(null);
   const timerRef = useRef<NodeJS.Timeout>();
+  
+  // Course session state
+  const [isCourseSession, setIsCourseSession] = useState(false);
+  const [availableModules, setAvailableModules] = useState<any[]>([]);
+  const [currentSessionModule, setCurrentSessionModule] = useState<string | null>(null);
+  const [dropdownValue, setDropdownValue] = useState<string>('');
+  const [isLoadingModules, setIsLoadingModules] = useState(false);
   
   // Session conflict modal state
   const [showConflictModal, setShowConflictModal] = useState(false);
@@ -249,7 +266,185 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
     };
   }, []); // Remove all dependencies to prevent callback reassignment
 
-  // Start presentation session
+  // Load available modules for course sessions
+  const loadAvailableModules = useCallback(async () => {
+    if (!classId) {
+      console.log('❌ No classId provided to loadAvailableModules');
+      return;
+    }
+    
+    setIsLoadingModules(true);
+    try {
+      console.log('🔍 Loading modules for class:', classId);
+
+      // First, let's check what's in the modules table for this class
+      const { data: moduleCheck, error: moduleError } = await supabase
+        .from('modules')
+        .select('id, title, class_id')
+        .eq('class_id', classId);
+      
+      console.log('📋 Modules in class:', moduleCheck);
+      console.log('❌ Module query error:', moduleError);
+
+      // Check what's in the steps table for this class
+      if (moduleCheck && moduleCheck.length > 0) {
+        const moduleIds = moduleCheck.map(m => m.id);
+        const { data: stepsCheck, error: stepsError } = await supabase
+          .from('steps')
+          .select('id, step_number, title, slide_pdf_url, module_id')
+          .in('module_id', moduleIds)
+          .order('step_number');
+        
+        console.log('📋 Raw steps data:', stepsCheck);
+        console.log('❌ Steps query error:', stepsError);
+      }
+
+      // Now try the steps query
+      const { data: steps, error } = await supabase
+        .from('steps')
+        .select(`
+          id,
+          step_number,
+          title,
+          slide_pdf_url,
+          module_id,
+          modules!inner(
+            id,
+            title,
+            class_id
+          )
+        `)
+        .eq('modules.class_id', classId)
+        .not('slide_pdf_url', 'is', null)
+        .order('step_number');
+
+      console.log('📊 Database response:', { steps, error });
+
+      if (error) throw error;
+
+      // Create entries for each individual step (not grouped by module)
+      const allSteps = steps?.map(step => ({
+        id: step.id, // Use step ID, not module ID
+        moduleId: step.module_id, // Keep module ID for reference
+        title: step.modules.title,
+        stepNumber: step.step_number,
+        stepTitle: step.title,
+        hasPdf: !!step.slide_pdf_url,
+        // For compatibility with existing code, add steps array with just this step
+        steps: [{
+          id: step.id,
+          stepNumber: step.step_number,
+          title: step.title,
+          hasPdf: !!step.slide_pdf_url
+        }]
+      })) || [];
+
+      // Deduplicate steps by step_number and title combination
+      const seenSteps = new Map();
+      const processedModules = allSteps.filter(step => {
+        const key = `${step.stepNumber}-${step.stepTitle}`;
+        if (seenSteps.has(key)) {
+          console.log(`🔄 Removing duplicate step: Step ${step.stepNumber}: ${step.stepTitle} (ID: ${step.id})`);
+          return false;
+        }
+        seenSteps.set(key, true);
+        return true;
+      });
+
+      // Sort by step number to show sequential steps
+      processedModules.sort((a, b) => a.stepNumber - b.stepNumber);
+
+      setAvailableModules(processedModules);
+      console.log('📚 Loaded available steps for course session:', processedModules);
+      console.log('📊 Step breakdown:', processedModules.map(step => ({
+        stepNumber: step.stepNumber,
+        stepTitle: step.stepTitle,
+        stepId: step.id,
+        moduleId: step.moduleId,
+        moduleTitle: step.title
+      })));
+    } catch (error) {
+      console.error('❌ Failed to load modules:', error);
+      setError(`Failed to load course modules: ${error.message}`);
+    } finally {
+      setIsLoadingModules(false);
+    }
+  }, [classId]);
+
+  // Load modules when classId becomes available
+  useEffect(() => {
+    if (classId) {
+      loadAvailableModules();
+    }
+  }, [classId, loadAvailableModules]);
+
+  // Update dropdown value when moduleId or availableModules change
+  useEffect(() => {
+    console.log('🔄 useEffect triggered for dropdown value update:', {
+      availableModulesLength: availableModules.length,
+      moduleId,
+      currentSessionModule,
+      currentStepId,
+      currentDropdownValue: dropdownValue
+    });
+    
+    if (availableModules.length > 0) {
+      const moduleIdToUse = currentSessionModule || moduleId;
+      
+      // First, try to find the current step by ID if provided
+      let currentStep = null;
+      if (currentStepId) {
+        currentStep = availableModules.find(step => step.id === currentStepId);
+        console.log('🔄 Looking for currentStepId:', currentStepId, 'found:', currentStep);
+      }
+      
+      // If not found by ID, fall back to finding by module ID (first step of module)
+      if (!currentStep) {
+        currentStep = availableModules.find(step => step.moduleId === moduleIdToUse);
+        console.log('🔄 Falling back to first step of module:', moduleIdToUse, 'found:', currentStep);
+      }
+      
+      const newValue = currentStep ? currentStep.id : '';
+      
+      console.log('🔄 Dropdown value calculation details:', {
+        moduleIdToUse,
+        currentStepId,
+        currentStep: currentStep ? {
+          id: currentStep.id,
+          stepNumber: currentStep.stepNumber,
+          stepTitle: currentStep.stepTitle,
+          moduleId: currentStep.moduleId
+        } : null,
+        oldValue: dropdownValue,
+        newValue,
+        willUpdate: newValue !== dropdownValue,
+        allAvailableSteps: availableModules.map(step => ({
+          id: step.id,
+          stepNumber: step.stepNumber,
+          stepTitle: step.stepTitle,
+          moduleId: step.moduleId
+        }))
+      });
+      
+      console.log('🔄 DETAILED STEP ANALYSIS:');
+      availableModules.forEach(step => {
+        console.log(`  Step ${step.stepNumber}: ${step.stepTitle} (ID: ${step.id}, Module: ${step.moduleId})`);
+      });
+      console.log(`🔄 Current step search - stepId: ${currentStepId}, moduleId: ${moduleIdToUse}`);
+      console.log(`🔄 Selected step ID will be: ${newValue}`);
+      
+      if (newValue !== dropdownValue) {
+        console.log('🔄 Setting dropdown value from', dropdownValue, 'to', newValue);
+        setDropdownValue(newValue);
+      } else {
+        console.log('🔄 Dropdown value unchanged:', dropdownValue);
+      }
+    } else {
+      console.log('🔄 No available modules, skipping dropdown update');
+    }
+  }, [moduleId, currentSessionModule, currentStepId, availableModules]);
+
+  // Start presentation session (enhanced for course sessions)
   const startSession = async () => {
     if (!sessionName.trim()) {
       setError('Please enter a session name');
@@ -260,43 +455,111 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
     setError(null);
 
     try {
-      const result = await syncManager.createSession(
-        moduleId, 
-        totalSlides, 
+      console.log('🚀 Starting course session with:', { classId, sessionName: sessionName.trim() });
+      
+      // Create course-level session
+      const sessionId = await syncManager.createCourseSession(
+        classId,
         sessionName.trim()
       );
 
-      // Check if we got a conflict response
-      if (result && typeof result === 'object' && (result as any).conflict) {
-        const conflictResult = result as any;
-        setConflictInfo({
-          existingSession: conflictResult.existingSession,
-          isOwnSession: conflictResult.isOwnSession,
-          moduleId,
-          totalSlides,
-          sessionName: sessionName.trim()
-        });
-        setShowConflictModal(true);
-        setIsLoading(false);
+      console.log('📋 Course session creation result:', sessionId);
+
+      if (sessionId) {
+        setIsSessionActive(true);
+        setIsCourseSession(true);
+        setSessionStartTime(new Date());
+        
+        // Switch to current module to start presentation
+        const switchSuccess = await syncManager.switchToModule(moduleId, totalSlides, 1);
+        if (switchSuccess) {
+          setCurrentSessionModule(moduleId);
+          
+          // Ensure PDF starts at slide 1 for new session
+          setTimeout(() => {
+            console.log('🔄 Instructor started course session - ensuring PDF at slide 1');
+            onSlideChange(1);
+          }, 500);
+        } else {
+          setError('Session created but failed to start with current module');
+        }
+      } else {
+        setError('Failed to create course session. Please try refreshing the page.');
+      }
+    } catch (error) {
+      console.error('Course session creation error:', error);
+      setError(`Failed to start course session: ${error}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Switch to a different step within the active course session
+  const switchToModule = async (newStepId: string) => {
+    console.log('🚀 switchToModule called with stepId:', newStepId);
+    console.log('📊 Current session state:', { isSessionActive, isCourseSession });
+    
+    if (!isSessionActive || !isCourseSession) {
+      const errorMsg = 'No active course session to switch steps';
+      console.log('❌', errorMsg);
+      setError(errorMsg);
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      // Get step info to determine the actual module ID
+      const stepInfo = availableModules.find(m => m.id === newStepId);
+      console.log('🔍 Found step info:', stepInfo);
+      
+      if (!stepInfo) {
+        const errorMsg = 'Selected step not found';
+        console.log('❌', errorMsg);
+        setError(errorMsg);
         return;
       }
 
-      // Normal session creation
-      if (result && typeof result === 'string') {
-        setIsSessionActive(true);
-        setSessionStartTime(new Date());
+      // Use the moduleId from the step info
+      const actualModuleId = stepInfo.moduleId;
+      console.log('🔄 Switching to step:', newStepId, 'which belongs to module:', actualModuleId);
+      console.log('📊 Step details:', {
+        stepNumber: stepInfo.stepNumber,
+        stepTitle: stepInfo.stepTitle,
+        moduleId: actualModuleId
+      });
+
+      // For now, we'll assume same slide count - in production you'd fetch this
+      console.log('🔧 Calling syncManager.switchToModule with:', { actualModuleId, totalSlides });
+      const switchSuccess = await syncManager.switchToModule(actualModuleId, totalSlides, 1);
+      console.log('📊 syncManager.switchToModule result:', switchSuccess);
+      
+      if (switchSuccess) {
+        console.log('✅ Switch successful - updating session state');
+        setCurrentSessionModule(actualModuleId);
         
-        // Ensure PDF starts at slide 1 for new session
+        // Notify parent component about module switch
+        if (onModuleSwitch) {
+          console.log('🔄 Calling onModuleSwitch with:', actualModuleId);
+          onModuleSwitch(actualModuleId);
+        } else {
+          console.log('⚠️ onModuleSwitch callback not provided');
+        }
+        
+        // Reset to slide 1 for new module
         setTimeout(() => {
-          console.log('🔄 Instructor started new session - ensuring PDF at slide 1');
+          console.log('🔄 Switched to new step/module - resetting to slide 1');
           onSlideChange(1);
         }, 500);
       } else {
-        setError('Failed to create session. Please try refreshing the page.');
+        const errorMsg = 'Failed to switch to selected step';
+        console.log('❌', errorMsg);
+        setError(errorMsg);
       }
     } catch (error) {
-      console.error('Session creation error:', error);
-      setError(`Failed to start session: ${error}`);
+      console.error('Step switch error:', error);
+      setError(`Failed to switch steps: ${error}`);
     } finally {
       setIsLoading(false);
     }
@@ -309,9 +572,12 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
     try {
       await syncManager.endSession();
       setIsSessionActive(false);
+      setIsCourseSession(false);
+      setCurrentSessionModule(null);
       setSessionStartTime(null);
       setParticipants([]);
       setSessionName(''); // Clear session name when ending
+      // Don't reset currentStepId - keep it for non-session navigation
       
       if (timerRef.current) {
         clearInterval(timerRef.current);
@@ -607,28 +873,30 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
         <div className="p-4 border-b border-gray-200">
           <div className="space-y-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
                 Session Name
               </label>
-              <input
-                type="text"
-                value={sessionName}
-                onChange={(e) => setSessionName(e.target.value)}
-                placeholder="Enter session name (e.g., 'Module 1 - Introduction')"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-[#F98B3D] focus:border-transparent"
-                disabled={isLoading}
-              />
+              <div className="flex items-center space-x-3">
+                <input
+                  type="text"
+                  value={sessionName}
+                  onChange={(e) => setSessionName(e.target.value)}
+                  placeholder="Enter session name (e.g., 'Module 1 - Introduction')"
+                  className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:ring-[#F98B3D] focus:border-transparent"
+                  disabled={isLoading}
+                />
+                
+                <Button
+                  onClick={startSession}
+                  disabled={isLoading || !sessionName.trim()}
+                  variant="primary"
+                  size="sm"
+                >
+                  <Play size={16} className="mr-2" />
+                  {isLoading ? 'Starting...' : 'Start Presentation'}
+                </Button>
+              </div>
             </div>
-            
-            <Button
-              onClick={startSession}
-              disabled={isLoading || !sessionName.trim()}
-              className="w-full"
-              variant="primary"
-            >
-              <Play size={16} className="mr-2" />
-              {isLoading ? 'Starting Session...' : 'Start Presentation Session'}
-            </Button>
           </div>
         </div>
       ) : (
@@ -637,7 +905,14 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
             <div className="flex items-center space-x-4">
               <div className="flex items-center text-green-600">
                 <Activity size={16} className="mr-1" />
-                <span className="font-medium">{sessionName || 'Session'} Active</span>
+                <span className="font-medium">
+                  {sessionName || 'Session'} Active
+                  {isCourseSession && stepNumber && (
+                    <span className="ml-2 text-sm text-gray-600">
+                      (Step {stepNumber})
+                    </span>
+                  )}
+                </span>
               </div>
               
               {sessionStartTime && (
@@ -655,26 +930,8 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
               className="text-red-600 border-red-300 hover:bg-red-50"
             >
               <Square size={16} className="mr-2" />
-              End Session
+              End Course Session
             </Button>
-          </div>
-
-          {/* Session Stats */}
-          <div className="bg-gray-50 rounded-lg p-3">
-            <div className="grid grid-cols-3 gap-4 text-center">
-              <div>
-                <div className="text-lg font-bold text-[#F98B3D]">{totalCount}</div>
-                <div className="text-xs text-gray-600">Participants</div>
-              </div>
-              <div>
-                <div className="text-lg font-bold text-green-600">{syncedCount}</div>
-                <div className="text-xs text-gray-600">In Sync</div>
-              </div>
-              <div>
-                <div className="text-lg font-bold text-blue-600">{syncPercentage}%</div>
-                <div className="text-xs text-gray-600">Sync Rate</div>
-              </div>
-            </div>
           </div>
         </div>
       )}
@@ -731,27 +988,140 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
           </Button>
         </div>
 
-        {/* Slide Jump */}
-        <div className="flex items-center space-x-2">
-          <label className="text-sm text-gray-600">Jump to:</label>
-          <input
-            type="number"
-            min="1"
-            max={totalSlides}
-            value=""
-            placeholder={`1-${totalSlides}`}
-            className="w-20 px-2 py-1 text-sm border border-gray-300 rounded focus:ring-[#F98B3D] focus:border-transparent"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                const slideNum = parseInt((e.target as HTMLInputElement).value);
-                if (slideNum >= 1 && slideNum <= totalSlides) {
-                  navigateToSlide(slideNum);
-                  (e.target as HTMLInputElement).value = '';
+        {/* Step Navigation Controls */}
+        {availableModules.length > 1 && (
+          <div className="mb-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <label className="text-sm text-gray-600">Jump to page:</label>
+                <input
+                  type="number"
+                  min="1"
+                  max={totalSlides}
+                  placeholder={`1-${totalSlides}`}
+                  className="w-20 px-2 py-1 text-sm border border-gray-300 rounded focus:ring-[#F98B3D] focus:border-transparent"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const targetSlide = parseInt(e.target.value);
+                      if (targetSlide >= 1 && targetSlide <= totalSlides) {
+                        onSlideChange(targetSlide);
+                        e.target.value = '';
+                      }
+                    }
+                  }}
+                />
+              </div>
+              
+              <div className="flex items-center space-x-2">
+                <span className="text-sm font-medium text-gray-900">Step Navigation</span>
+                <select
+                  value={dropdownValue}
+                  onChange={async (e) => {
+                    console.log('🎯🎯🎯 DROPDOWN onChange TRIGGERED! 🎯🎯🎯');
+                    console.log('🎯 Event details:', {
+                      eventType: e.type,
+                      targetValue: e.target.value,
+                      targetTagName: e.target.tagName,
+                      currentDropdownValue: dropdownValue,
+                      timestamp: new Date().toISOString()
+                    });
+                    
+                    const selectedStepId = e.target.value;
+                    
+                    // Update the dropdown value state immediately
+                    setDropdownValue(selectedStepId);
+                    
+                    // Find the selected step
+                    const selectedStep = availableModules.find(step => step.id === selectedStepId);
+                    console.log('🎯 Selected step:', selectedStep);
+                    
+                    if (selectedStep) {
+                      console.log('✅ Step selected - switching to:', selectedStep.moduleId);
+                      
+                      // Check if the selected step belongs to the same module
+                      const isSameModule = selectedStep.moduleId === moduleId;
+                      console.log('🔄 Same module check:', {
+                        selectedStepModuleId: selectedStep.moduleId,
+                        currentModuleId: moduleId,
+                        isSameModule
+                      });
+                      
+                      if (isSameModule && isSessionActive) {
+                        // Same module and session active - use step-level sync manager navigation
+                        console.log('🔄 Using syncManager.switchToStep for same module navigation');
+                        const switchSuccess = await syncManager.switchToStep(selectedStepId, totalSlides, 1);
+                        
+                        if (switchSuccess) {
+                          console.log('✅ Step switch successful');
+                          // Use step switch callback if available
+                          if (onStepSwitch) {
+                            console.log('🔄 Calling onStepSwitch for UI update');
+                            onStepSwitch(selectedStepId);
+                          }
+                        } else {
+                          console.log('❌ Step switch failed');
+                          setError('Failed to switch to selected step');
+                        }
+                      } else if (isSameModule && onStepSwitch) {
+                        // Same module but no session - use step navigation callback
+                        console.log('🔄 Using onStepSwitch for same module navigation (no session)');
+                        onStepSwitch(selectedStepId);
+                      } else if (onModuleSwitch) {
+                        // Different module - use module navigation
+                        console.log('🔄 Using onModuleSwitch for different module navigation');
+                        onModuleSwitch(selectedStep.moduleId);
+                      } else {
+                        console.log('❌ No navigation handler available');
+                      }
+                    }
+                  }}
+                  onFocus={() => {
+                    console.log('🎯🔍 DROPDOWN onFocus TRIGGERED! 🔍🎯');
+                  }}
+                  onBlur={() => {
+                    console.log('🎯🔍 DROPDOWN onBlur TRIGGERED! 🔍🎯');
+                  }}
+                  onMouseDown={() => {
+                    console.log('🎯🖱️ DROPDOWN onMouseDown TRIGGERED! 🖱️🎯');
+                  }}
+                  onMouseUp={() => {
+                    console.log('🎯🖱️ DROPDOWN onMouseUp TRIGGERED! 🖱️🎯');
+                  }}
+                  className="px-3 py-1 text-sm border border-gray-300 rounded focus:ring-[#F98B3D] focus:border-transparent"
+                >
+                  {availableModules.map((step) => (
+                    <option key={step.id} value={step.id}>
+                      Step {step.stepNumber}: {step.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Slide Jump - when no step navigation available */}
+        {availableModules.length <= 1 && (
+          <div className="flex items-center space-x-2 mb-3">
+            <label className="text-sm text-gray-600">Jump to page:</label>
+            <input
+              type="number"
+              min="1"
+              max={totalSlides}
+              placeholder={`1-${totalSlides}`}
+              className="w-20 px-2 py-1 text-sm border border-gray-300 rounded focus:ring-[#F98B3D] focus:border-transparent"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  const slideNum = parseInt((e.target as HTMLInputElement).value);
+                  if (slideNum >= 1 && slideNum <= totalSlides) {
+                    navigateToSlide(slideNum);
+                    (e.target as HTMLInputElement).value = '';
+                  }
                 }
-              }
-            }}
-          />
-        </div>
+              }}
+            />
+          </div>
+        )}
 
         {/* Auto-advance Controls */}
         {isSessionActive && (
@@ -798,6 +1168,26 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
           </div>
         )}
       </div>
+
+      {/* Session Stats */}
+      {isSessionActive && (
+        <div className="p-4">
+          <div className="grid grid-cols-3 gap-4 text-center">
+            <div>
+              <div className="text-lg font-bold text-[#F98B3D]">{totalCount}</div>
+              <div className="text-xs text-gray-600">Participants</div>
+            </div>
+            <div>
+              <div className="text-lg font-bold text-green-600">{syncedCount}</div>
+              <div className="text-xs text-gray-600">In Sync</div>
+            </div>
+            <div>
+              <div className="text-lg font-bold text-blue-600">{syncPercentage}%</div>
+              <div className="text-xs text-gray-600">Sync Rate</div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Participants Section */}
       {isSessionActive && (

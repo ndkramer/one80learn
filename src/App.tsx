@@ -57,6 +57,7 @@ const ResourceAdmin = React.lazy(() => import('./pages/admin/ResourceAdmin'));
 const UserAdmin = React.lazy(() => import('./pages/admin/UserAdmin'));
 const ModuleAdmin = React.lazy(() => import('./pages/admin/ModuleAdmin'));
 const ModuleResourcesPage = React.lazy(() => import('./pages/admin/ModuleResourcesPage'));
+const StepAdmin = React.lazy(() => import('./pages/admin/StepAdmin'));
 const AdminLayout = React.lazy(() => import('./pages/admin/AdminLayout'));
 const EnrollmentCourseList = React.lazy(() => import('./pages/admin/EnrollmentCourseList'));
 const EnrollmentUserSelection = React.lazy(() => import('./pages/admin/EnrollmentUserSelection'));
@@ -216,6 +217,11 @@ function App() {
                 <Route path="courses/:courseId/modules/:moduleId/resources" element={
                   <SuspenseWithErrorBoundary fallback={<LoadingSpinner />} isolate={true}>
                     <ModuleResourcesPage />
+                  </SuspenseWithErrorBoundary>
+                } />
+                <Route path="courses/:courseId/modules/:moduleId/steps" element={
+                  <SuspenseWithErrorBoundary fallback={<LoadingSpinner />} isolate={true}>
+                    <StepAdmin />
                   </SuspenseWithErrorBoundary>
                 } />
                 <Route path="enrollments" element={
