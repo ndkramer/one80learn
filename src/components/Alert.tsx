@@ -6,13 +6,15 @@ interface AlertProps {
   title?: string;
   children: React.ReactNode;
   onClose?: () => void;
+  className?: string;
 }
 
 const Alert: React.FC<AlertProps> = ({
   type = 'info',
   title,
   children,
-  onClose
+  onClose,
+  className = ''
 }) => {
   const styles = {
     info: {
@@ -44,7 +46,11 @@ const Alert: React.FC<AlertProps> = ({
   const { bg, border, text, icon } = styles[type];
 
   return (
-    <div className={`${bg} ${border} border rounded-lg p-4`}>
+    <div 
+      role="alert" 
+      aria-live="polite"
+      className={`${bg} ${border} border rounded-lg p-4 ${className}`}
+    >
       <div className="flex">
         <div className="flex-shrink-0">
           {icon}
@@ -63,7 +69,14 @@ const Alert: React.FC<AlertProps> = ({
           <div className="ml-auto pl-3">
             <button
               onClick={onClose}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onClose();
+                }
+              }}
               className={`inline-flex rounded-md p-1.5 ${text} hover:${bg} focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-${bg} focus:ring-${border}`}
+              aria-label="Dismiss alert"
             >
               <span className="sr-only">Dismiss</span>
               <X className="h-5 w-5" />

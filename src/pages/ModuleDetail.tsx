@@ -20,7 +20,11 @@ import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 
 const ModuleDetail: React.FC = () => {
+  console.log('🎯 ModuleDetail component is mounting/rendering!');
+  
   const { classId, moduleId } = useParams<{ classId: string; moduleId: string }>();
+  console.log('🔍 ModuleDetail - URL params:', { classId, moduleId });
+  
   const navigate = useNavigate();
   const { enrolledClasses, isLoading: classLoading } = useClass();
   const { user } = useAuth();
@@ -58,6 +62,15 @@ const ModuleDetail: React.FC = () => {
   console.log('Module Data:', {
     moduleId,
     module,
+  });
+  
+  console.log('🔍 ModuleDetail state:', {
+    classLoading,
+    enrolledClasses: enrolledClasses?.length,
+    classItem: !!classItem,
+    module: !!module,
+    isCheckingAuth,
+    supportsSync
   });
 
   const isModuleCompleted = moduleId ? moduleProgress[moduleId] : false;
@@ -198,37 +211,50 @@ const ModuleDetail: React.FC = () => {
   // Check instructor permissions and sync support
   useEffect(() => {
     const checkPresentationCapabilities = async () => {
+      console.log('🔧 ModuleDetail: checkPresentationCapabilities starting for moduleId:', moduleId);
+      
       if (!moduleId) {
+        console.log('❌ No moduleId, setting isCheckingAuth to false');
         setIsCheckingAuth(false);
         return;
       }
 
       try {
         setIsCheckingAuth(true);
+        console.log('🔍 Checking instructor status...');
         
         // Check if user is instructor for this module
         const instructorCheck = await isModuleInstructor(moduleId);
+        console.log('👤 Instructor check result:', instructorCheck);
         setIsInstructor(instructorCheck);
 
         // Check if module supports sync
+        console.log('🔍 Checking sync support...');
         const syncSupport = await moduleSupportsSync(moduleId);
+        console.log('📊 Sync support result:', syncSupport);
         setSupportsSync(syncSupport);
 
         // If module supports sync, get PDF page count from database
         if (syncSupport) {
+          console.log('✅ Module supports sync, fetching PDF page count...');
           const { data: moduleData } = await supabase
             .from('modules')
             .select('pdf_total_pages')
             .eq('id', moduleId)
             .single();
 
+          console.log('📄 Module page data:', moduleData);
           if (moduleData?.pdf_total_pages) {
+            console.log('📊 Setting total slides to:', moduleData.pdf_total_pages);
             setTotalSlides(moduleData.pdf_total_pages);
           }
+        } else {
+          console.log('❌ Module does not support sync');
         }
       } catch (error) {
         console.error('Error checking presentation capabilities:', error);
       } finally {
+        console.log('🔧 Setting isCheckingAuth to false');
         setIsCheckingAuth(false);
       }
     };
@@ -508,37 +534,29 @@ const ModuleDetail: React.FC = () => {
       <div className="space-y-6">
         {/* Slides section */}
         <div className="space-y-4">
-          {/* Instructor Controls - Only show for instructors when sync is supported */}
-          {isInstructor && supportsSync && !isCheckingAuth && (
-            <div className="bg-white rounded-lg shadow-md overflow-hidden">
-              <ErrorBoundary>
-                <InstructorPresentationControl
-                  moduleId={moduleId!}
-                  totalSlides={totalSlides}
-                  currentSlide={currentSlide}
-                  onSlideChange={handleSlideChange}
-                  presentationTitle={module.title}
-                />
-              </ErrorBoundary>
-            </div>
-          )}
-
           {/* Slides viewer */}
           <div className="bg-white rounded-lg shadow-md overflow-hidden min-h-[600px]">
             <div className="relative">
               <ErrorBoundary>
-                {supportsSync && !isCheckingAuth ? (
-                  <SyncedSlideViewer
-                    title={`Slides for ${module.title}`}
-                    moduleId={moduleId!}
-                    pdfUrl={module.slide_pdf_url}
-                  />
-                ) : (
-                  <SlideViewer
-                    title={`Slides for ${module.title}`}
-                    pdfUrl={module.slide_pdf_url}
-                  />
-                )}
+                {(() => {
+                  console.log('🎯 ModuleDetail render check - supportsSync:', supportsSync, 'isCheckingAuth:', isCheckingAuth);
+                  console.log('🎯 Will render SyncedSlideViewer?', supportsSync && !isCheckingAuth);
+                  
+                  return supportsSync && !isCheckingAuth ? (
+                    <SyncedSlideViewer
+                      title={`Slides for ${module.title}`}
+                      moduleId={moduleId!}
+                      pdfUrl={module.slide_pdf_url}
+                      currentSlide={currentSlide}
+                    />
+                  ) : (
+                    <SlideViewer
+                      title={`Slides for ${module.title}`}
+                      pdfUrl={module.slide_pdf_url}
+                      currentSlide={currentSlide}
+                    />
+                  );
+                })()}
               </ErrorBoundary>
               
               {/* Sync capability indicator */}
@@ -559,6 +577,21 @@ const ModuleDetail: React.FC = () => {
             </div>
           </div>
         </div>
+        
+        {/* Instructor Controls - Only show for instructors when sync is supported */}
+        {isInstructor && supportsSync && !isCheckingAuth && (
+          <div className="bg-white rounded-lg shadow-md overflow-hidden">
+            <ErrorBoundary>
+              <InstructorPresentationControl
+                moduleId={moduleId!}
+                totalSlides={totalSlides}
+                currentSlide={currentSlide}
+                onSlideChange={handleSlideChange}
+                presentationTitle={module.title}
+              />
+            </ErrorBoundary>
+          </div>
+        )}
         
         {/* Notes column */}
         <div className="bg-white rounded-lg shadow-md overflow-hidden flex flex-col">

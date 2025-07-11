@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Play, 
   Square, 
@@ -20,6 +20,7 @@ import {
   SessionParticipant,
   PresentationSyncCallbacks 
 } from '../utils/presentationSyncManager';
+import { supabase } from '../utils/supabase';
 import Alert from './Alert';
 import Button from './Button';
 
@@ -62,63 +63,183 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
   const [sessionStartTime, setSessionStartTime] = useState<Date | null>(null);
   const [autoAdvanceTimer, setAutoAdvanceTimer] = useState<number | null>(null);
   const timerRef = useRef<NodeJS.Timeout>();
+  
+  // Session conflict modal state
+  const [showConflictModal, setShowConflictModal] = useState(false);
+  const [conflictInfo, setConflictInfo] = useState<{
+    existingSession: any;
+    isOwnSession: boolean;
+    moduleId: string;
+    totalSlides: number;
+    sessionName: string;
+  } | null>(null);
 
-  // Initialize sync manager
+  // Stable callback functions to prevent sync manager state loss
+  const handleSlideChange = useCallback((slide: number) => {
+    onSlideChange(slide);
+  }, [onSlideChange]);
+
+  const handleSyncStatusChange = useCallback((status: SyncStatus) => {
+    setSyncStatus(status);
+    if (status.isConnected && status.sessionId && !sessionStartTime) {
+      setSessionStartTime(new Date());
+    }
+  }, [sessionStartTime, syncStatus]);
+
+  const handleParticipantUpdate = useCallback(async (participantList: SessionParticipant[]) => {
+    console.log('🔄 handleParticipantUpdate called with participant list:', participantList);
+    console.log('📊 Current syncStatus.currentSlide:', syncStatus.currentSlide);
+    console.log('📊 Current currentSlide prop:', currentSlide);
+    
+    // Get the most up-to-date current slide from sync manager
+    const currentSyncStatus = syncManager.getSyncStatus();
+    console.log('📊 SyncManager currentSlide:', currentSyncStatus.currentSlide);
+    
+    // Use the most reliable source for current slide comparison
+    const instructorCurrentSlide = currentSyncStatus.currentSlide || syncStatus.currentSlide || currentSlide;
+    console.log('📊 Using slide for comparison:', instructorCurrentSlide);
+    
+    // Enhance participant data with user info and sync status
+    const enhancedParticipants: ParticipantWithStatus[] = await Promise.all(
+      participantList.map(async (participant) => {
+        const isUpToDate = participant.last_seen_slide === instructorCurrentSlide;
+        console.log(`👤 Participant ${participant.student_id.slice(-4)}: last_seen=${participant.last_seen_slide}, instructor=${instructorCurrentSlide}, upToDate=${isUpToDate}`);
+        
+        // In a real implementation, you'd fetch user details here
+        // For now, we'll use placeholder data
+        return {
+          ...participant,
+          isUpToDate,
+          name: `Student ${participant.student_id.slice(-4)}`,
+          email: `student-${participant.student_id.slice(-4)}@example.com`
+        };
+      })
+    );
+    
+    console.log('✅ Enhanced participants:', enhancedParticipants.map(p => ({ 
+      id: p.student_id.slice(-4), 
+      lastSlide: p.last_seen_slide, 
+      isUpToDate: p.isUpToDate 
+    })));
+    
+    setParticipants(enhancedParticipants);
+  }, [syncStatus.currentSlide, currentSlide]);
+
+  const handleSessionEnd = useCallback(() => {
+    setIsSessionActive(false);
+    setSessionStartTime(null);
+    setParticipants([]);
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+  }, []);
+
+  const handleError = useCallback((errorMsg: string) => {
+    setError(errorMsg);
+  }, []);
+
+  // Initialize sync manager ONCE - critical to avoid callback reassignment
   useEffect(() => {
     const initializeSync = async () => {
       const success = await syncManager.initialize();
       if (!success) {
         setError('Failed to initialize sync manager');
+        return;
       }
+
+      // Set up callbacks ONCE and never reassign them
+      const callbacks: PresentationSyncCallbacks = {
+        onSlideChange: handleSlideChange,
+        onSyncStatusChange: handleSyncStatusChange,
+        onParticipantUpdate: handleParticipantUpdate,
+        onSessionEnd: handleSessionEnd,
+        onError: handleError
+      };
+
+      // Set callbacks only once to preserve sync manager state
+      syncManager.callbacks = callbacks;
+      
+      // Check for existing instructor sessions for this module
+      try {
+        console.log('🔍 Checking for existing instructor sessions for module:', moduleId);
+        const { data: { user } } = await supabase.auth.getUser();
+        
+        if (user) {
+          const { data: existingSessions } = await supabase
+            .from('presentation_sessions')
+            .select('*')
+            .eq('module_id', moduleId)
+            .eq('instructor_id', user.id)
+            .eq('is_active', true);
+
+          if (existingSessions && existingSessions.length > 0) {
+            const session = existingSessions[0];
+            console.log('✅ Found existing instructor session:', session.id, 'at slide:', session.current_slide, 'name:', session.session_name);
+            
+            // Set session name from database
+            setSessionName(session.session_name || 'Presentation Session');
+            
+            // Auto-rejoin the existing session
+            const joinSuccess = await syncManager.joinExistingSession(session.id);
+            if (joinSuccess) {
+              setIsSessionActive(true);
+              setSessionStartTime(new Date());
+              
+              // Sync PDF to current slide with multiple attempts for reliability
+              const syncPDF = (attempt = 1) => {
+                console.log(`🔄 Auto-rejoined session - syncing PDF to slide: ${session.current_slide} (attempt ${attempt})`);
+                
+                // Ensure we have a valid slide number
+                const targetSlide = session.current_slide || 1;
+                
+                // Call onSlideChange to trigger PDF navigation
+                onSlideChange(targetSlide);
+                
+                // Verify sync worked by checking again after a longer delay to allow PDF viewer to respond
+                if (attempt < 4) { // Increased to 4 attempts
+                  setTimeout(() => {
+                    // Check if we're still trying to sync to the same slide
+                    console.log('🔍 Auto-rejoin sync verification attempt', attempt + 1);
+                    console.log('📊 Target slide:', targetSlide, 'Expected sync after delay');
+                    
+                    // Try again if we haven't reached max attempts
+                    if (attempt < 3) {
+                      console.log('⚠️ PDF auto-rejoin sync retry...');
+                      syncPDF(attempt + 1);
+                    } else {
+                      console.log('ℹ️ Final auto-rejoin sync attempt completed');
+                    }
+                  }, 600 * attempt); // Increasing delays: 600ms, 1200ms, 1800ms
+                }
+              };
+              
+              // Wait for PDF viewer to be ready before syncing
+              setTimeout(() => {
+                console.log('🎯 Starting auto-rejoin PDF sync after initialization delay');
+                syncPDF();
+              }, 800); // Increased initial delay to ensure PDF viewer is ready
+            }
+          } else {
+            console.log('❌ No existing instructor sessions found for this module');
+          }
+        }
+      } catch (error) {
+        console.error('Error checking for existing sessions:', error);
+      }
+      
+      // Force status updates to ensure UI stays in sync
+      setTimeout(() => {
+        const currentStatus = syncManager.getSyncStatus();
+        handleSyncStatusChange(currentStatus);
+      }, 1000);
+      
+      setTimeout(() => {
+        const currentStatus = syncManager.getSyncStatus();
+        handleSyncStatusChange(currentStatus);
+      }, 3000);
     };
 
     initializeSync();
-
-    // Set up callbacks
-    const callbacks: PresentationSyncCallbacks = {
-      onSlideChange: (slide) => {
-        onSlideChange(slide);
-      },
-      onSyncStatusChange: (status) => {
-        setSyncStatus(status);
-        if (status.isConnected && status.sessionId && !sessionStartTime) {
-          setSessionStartTime(new Date());
-        }
-      },
-      onParticipantUpdate: async (participantList) => {
-        // Enhance participant data with user info and sync status
-        const enhancedParticipants: ParticipantWithStatus[] = await Promise.all(
-          participantList.map(async (participant) => {
-            const isUpToDate = participant.last_seen_slide === syncStatus.currentSlide;
-            
-            // In a real implementation, you'd fetch user details here
-            // For now, we'll use placeholder data
-            return {
-              ...participant,
-              isUpToDate,
-              name: `Student ${participant.student_id.slice(-4)}`,
-              email: `student-${participant.student_id.slice(-4)}@example.com`
-            };
-          })
-        );
-        
-        setParticipants(enhancedParticipants);
-      },
-      onSessionEnd: () => {
-        setIsSessionActive(false);
-        setSessionStartTime(null);
-        setParticipants([]);
-        if (timerRef.current) {
-          clearInterval(timerRef.current);
-        }
-      },
-      onError: (errorMsg) => {
-        setError(errorMsg);
-      }
-    };
-
-    // Update callbacks
-    syncManager.callbacks = callbacks;
 
     return () => {
       syncManager.disconnect();
@@ -126,7 +247,7 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
         clearInterval(timerRef.current);
       }
     };
-  }, [moduleId, onSlideChange, sessionStartTime, syncStatus.currentSlide]);
+  }, []); // Remove all dependencies to prevent callback reassignment
 
   // Start presentation session
   const startSession = async () => {
@@ -139,19 +260,42 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
     setError(null);
 
     try {
-      const sessionId = await syncManager.createSession(
+      const result = await syncManager.createSession(
         moduleId, 
         totalSlides, 
         sessionName.trim()
       );
 
-      if (sessionId) {
+      // Check if we got a conflict response
+      if (result && typeof result === 'object' && (result as any).conflict) {
+        const conflictResult = result as any;
+        setConflictInfo({
+          existingSession: conflictResult.existingSession,
+          isOwnSession: conflictResult.isOwnSession,
+          moduleId,
+          totalSlides,
+          sessionName: sessionName.trim()
+        });
+        setShowConflictModal(true);
+        setIsLoading(false);
+        return;
+      }
+
+      // Normal session creation
+      if (result && typeof result === 'string') {
         setIsSessionActive(true);
         setSessionStartTime(new Date());
+        
+        // Ensure PDF starts at slide 1 for new session
+        setTimeout(() => {
+          console.log('🔄 Instructor started new session - ensuring PDF at slide 1');
+          onSlideChange(1);
+        }, 500);
       } else {
-        setError('Failed to create session');
+        setError('Failed to create session. Please try refreshing the page.');
       }
     } catch (error) {
+      console.error('Session creation error:', error);
       setError(`Failed to start session: ${error}`);
     } finally {
       setIsLoading(false);
@@ -167,6 +311,7 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
       setIsSessionActive(false);
       setSessionStartTime(null);
       setParticipants([]);
+      setSessionName(''); // Clear session name when ending
       
       if (timerRef.current) {
         clearInterval(timerRef.current);
@@ -194,6 +339,111 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
   const goToNextSlide = () => navigateToSlide(Math.min(currentSlide + 1, totalSlides));
   const goToFirstSlide = () => navigateToSlide(1);
   const goToLastSlide = () => navigateToSlide(totalSlides);
+
+  // Handle conflict modal actions
+  const handleJoinExistingSession = async () => {
+    if (!conflictInfo) return;
+    
+    setIsLoading(true);
+    setShowConflictModal(false);
+    setError(null);
+
+    try {
+      const success = await syncManager.joinExistingSession(conflictInfo.existingSession.id);
+      
+      if (success) {
+        setIsSessionActive(true);
+        setSessionStartTime(new Date());
+        
+        // Set session name from conflict info
+        setSessionName(conflictInfo.existingSession.session_name || 'Presentation Session');
+        
+        // Ensure PDF syncs to current slide after joining with retry logic
+        const syncPDF = (attempt = 1) => {
+          const currentStatus = syncManager.getSyncStatus();
+          const targetSlide = conflictInfo.existingSession.current_slide || currentStatus.currentSlide;
+          console.log(`🔄 Manual join - syncing PDF to slide: ${targetSlide} (attempt ${attempt})`);
+          
+          // Call onSlideChange to trigger PDF navigation
+          onSlideChange(targetSlide);
+          
+          // Verify sync worked by checking again after a longer delay to allow PDF viewer to respond
+          if (attempt < 4) { // Increased to 4 attempts
+            setTimeout(() => {
+              console.log('🔍 Manual join sync verification attempt', attempt + 1);
+              console.log('📊 Target slide:', targetSlide, 'Expected sync after delay');
+              
+              // Try again if we haven't reached max attempts
+              if (attempt < 3) {
+                console.log('⚠️ PDF manual join sync retry...');
+                syncPDF(attempt + 1);
+              } else {
+                console.log('ℹ️ Final manual join sync attempt completed');
+              }
+            }, 600 * attempt); // Increasing delays: 600ms, 1200ms, 1800ms
+          }
+        };
+        
+        // Wait for PDF viewer to be ready before syncing
+        setTimeout(() => {
+          console.log('🎯 Starting manual join PDF sync after initialization delay');
+          syncPDF();
+        }, 800); // Increased initial delay to ensure PDF viewer is ready
+      } else {
+        setError('Failed to join existing session');
+      }
+    } catch (error) {
+      console.error('Join session error:', error);
+      setError(`Failed to join session: ${error}`);
+    } finally {
+      setIsLoading(false);
+      setConflictInfo(null);
+    }
+  };
+
+  const handleCloseCurrentSession = async () => {
+    if (!conflictInfo) return;
+    
+    setIsLoading(true);
+    setShowConflictModal(false);
+    setError(null);
+
+    try {
+      const sessionId = await syncManager.endExistingAndCreateNew(
+        conflictInfo.existingSession.id,
+        conflictInfo.moduleId,
+        conflictInfo.totalSlides,
+        conflictInfo.sessionName
+      );
+      
+      if (sessionId) {
+        setIsSessionActive(true);
+        setSessionStartTime(new Date());
+        
+        // Set session name for the new session
+        setSessionName(conflictInfo.sessionName);
+        
+        // Ensure PDF starts at slide 1 for new session
+        setTimeout(() => {
+          console.log('🔄 Instructor created new session - resetting PDF to slide 1');
+          onSlideChange(1);
+        }, 500);
+      } else {
+        setError('Failed to create new session');
+      }
+    } catch (error) {
+      console.error('Close and create session error:', error);
+      setError(`Failed to create session: ${error}`);
+    } finally {
+      setIsLoading(false);
+      setConflictInfo(null);
+    }
+  };
+
+  const handleCancelConflictModal = () => {
+    setShowConflictModal(false);
+    setConflictInfo(null);
+  };
 
   // Auto-advance functionality
   const startAutoAdvance = (intervalSeconds: number) => {
@@ -248,7 +498,73 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
   const { syncedCount, totalCount, syncPercentage } = getSyncSummary();
 
   return (
-    <div className="bg-white rounded-lg shadow-lg border border-gray-200">
+    <>
+      {/* Session Conflict Modal */}
+      {showConflictModal && conflictInfo && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
+            <div className="flex items-start mb-4">
+              <div className="flex-shrink-0">
+                <AlertCircle className="h-6 w-6 text-amber-500" />
+              </div>
+              <div className="ml-3">
+                <h3 className="text-lg font-medium text-gray-900">Session Already Running</h3>
+                <p className="mt-2 text-sm text-gray-500">
+                  {conflictInfo.isOwnSession ? (
+                    <>You already have an active session "{conflictInfo.existingSession.session_name}" running for this module.</>
+                  ) : (
+                    <>Another instructor has an active session "{conflictInfo.existingSession.session_name}" running for this module.</>
+                  )}
+                </p>
+              </div>
+            </div>
+            
+            <div className="mt-5 flex flex-col sm:flex-row gap-3">
+              {conflictInfo.isOwnSession ? (
+                <>
+                  <button
+                    type="button"
+                    className="flex-1 inline-flex justify-center px-4 py-2 text-sm font-medium text-white bg-[#F98B3D] border border-transparent rounded-md hover:bg-[#e07a2c] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#F98B3D]"
+                    onClick={handleJoinExistingSession}
+                    disabled={isLoading}
+                  >
+                    Join Running Session
+                  </button>
+                  <button
+                    type="button"
+                    className="flex-1 inline-flex justify-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#F98B3D]"
+                    onClick={handleCloseCurrentSession}
+                    disabled={isLoading}
+                  >
+                    Close Current Session
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="flex-1 inline-flex justify-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#F98B3D]"
+                  onClick={handleCancelConflictModal}
+                >
+                  OK
+                </button>
+              )}
+              
+              {conflictInfo.isOwnSession && (
+                <button
+                  type="button"
+                  className="inline-flex justify-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#F98B3D]"
+                  onClick={handleCancelConflictModal}
+                  disabled={isLoading}
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white rounded-lg shadow-lg border border-gray-200">
       {/* Header */}
       <div className="p-4 border-b border-gray-200">
         <div className="flex items-center justify-between">
@@ -272,6 +588,7 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
                 <span className="text-sm font-medium">Disconnected</span>
               </div>
             )}
+
           </div>
         </div>
       </div>
@@ -320,7 +637,7 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
             <div className="flex items-center space-x-4">
               <div className="flex items-center text-green-600">
                 <Activity size={16} className="mr-1" />
-                <span className="font-medium">Session Active</span>
+                <span className="font-medium">{sessionName || 'Session'} Active</span>
               </div>
               
               {sessionStartTime && (
@@ -554,6 +871,7 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
         </div>
       )}
     </div>
+    </>
   );
 };
 

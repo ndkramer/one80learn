@@ -216,14 +216,24 @@ export async function getInstructedModules(): Promise<any[]> {
  */
 export async function moduleSupportsSync(moduleId: string): Promise<boolean> {
   try {
-    const { data: moduleData } = await supabase
+    console.log('🔍 moduleSupportsSync called for moduleId:', moduleId);
+    
+    const { data: moduleData, error } = await supabase
       .from('modules')
       .select('supports_sync, slide_pdf_url')
       .eq('id', moduleId)
       .single();
 
+    console.log('📊 moduleSupportsSync query result:', moduleData);
+    console.log('❌ moduleSupportsSync query error:', error);
+
     // Module supports sync if explicitly enabled AND has a PDF
-    return !!(moduleData?.supports_sync && moduleData?.slide_pdf_url);
+    const result = !!(moduleData?.supports_sync && moduleData?.slide_pdf_url);
+    console.log('📊 moduleSupportsSync final result:', result);
+    console.log('📝 supports_sync:', moduleData?.supports_sync);
+    console.log('📝 slide_pdf_url:', moduleData?.slide_pdf_url);
+    
+    return result;
   } catch (error) {
     console.error('Failed to check module sync support:', error);
     return false;

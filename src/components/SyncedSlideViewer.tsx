@@ -36,6 +36,7 @@ interface SyncedSlideViewerProps {
   title: string;
   moduleId: string;
   pdfUrl?: string;
+  currentSlide?: number; // Add prop to control which slide to display
 }
 
 interface SessionInfo {
@@ -49,7 +50,8 @@ interface SessionInfo {
 const SyncedSlideViewer: React.FC<SyncedSlideViewerProps> = ({ 
   title, 
   moduleId, 
-  pdfUrl 
+  pdfUrl,
+  currentSlide 
 }) => {
   // Standard slide viewer state
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -71,7 +73,7 @@ const SyncedSlideViewer: React.FC<SyncedSlideViewerProps> = ({
     participantCount: 0
   });
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
-  const [showSessionInfo, setShowSessionInfo] = useState(false);
+
   const [autoJoinAttempted, setAutoJoinAttempted] = useState(false);
   const [manualSlideOverride, setManualSlideOverride] = useState(false);
 
@@ -102,8 +104,14 @@ const SyncedSlideViewer: React.FC<SyncedSlideViewerProps> = ({
 
   // Initialize sync manager
   useEffect(() => {
+    console.log('🎯 SyncedSlideViewer sync useEffect triggered');
+    console.log('📊 Current state - moduleId:', moduleId, 'numPages:', numPages, 'autoJoinAttempted:', autoJoinAttempted);
+    
     const initializeSync = async () => {
+      console.log('🔧 Initializing sync manager...');
       const success = await syncManager.initialize();
+      console.log('🔧 Sync manager initialization result:', success);
+      
       if (!success) {
         console.warn('Failed to initialize sync manager');
         return;
@@ -112,10 +120,14 @@ const SyncedSlideViewer: React.FC<SyncedSlideViewerProps> = ({
       // Set up callbacks
       const callbacks: PresentationSyncCallbacks = {
         onSlideChange: (slide) => {
+          console.log('🎯 SyncedSlideViewer onSlideChange called with slide:', slide);
+          console.log('📊 Current pageNumber before change:', pageNumber);
           setPageNumber(slide);
           setManualSlideOverride(false); // Reset override when syncing
+          console.log('✅ Updated pageNumber to:', slide);
         },
         onSyncStatusChange: (status) => {
+          console.log('🔄 SyncedSlideViewer onSyncStatusChange called - isInstructor:', status.isInstructor, 'isConnected:', status.isConnected);
           setSyncStatus(status);
           
           // Update session info when connected
@@ -127,7 +139,6 @@ const SyncedSlideViewer: React.FC<SyncedSlideViewerProps> = ({
         },
         onSessionEnd: () => {
           setSessionInfo(null);
-          setShowSessionInfo(false);
         },
         onError: (errorMsg) => {
           // Only show critical errors to students
@@ -139,18 +150,47 @@ const SyncedSlideViewer: React.FC<SyncedSlideViewerProps> = ({
 
       syncManager.callbacks = callbacks;
 
-      // Try to auto-join active session for this module
+      // Try to auto-join active session for this module (only for students)
+      console.log('🤔 Checking auto-join conditions - autoJoinAttempted:', autoJoinAttempted, 'numPages:', numPages);
+      
       if (!autoJoinAttempted && numPages > 0) {
+        console.log('✅ Auto-join conditions met, proceeding...');
         setAutoJoinAttempted(true);
-        const joined = await syncManager.findAndJoinActiveSession(moduleId);
-        if (joined) {
-          setShowSessionInfo(true);
+        try {
+          console.log('🔍 Student auto-join check starting for module:', moduleId);
+          
+          // Check if user is instructor for this module first
+          const isInstructor = await syncManager.isModuleInstructor(moduleId);
+          console.log('👤 User instructor status:', isInstructor);
+          
+          if (!isInstructor) {
+            console.log('👨‍🎓 User is student, attempting auto-join...');
+            const joined = await syncManager.findAndJoinActiveSession(moduleId);
+            console.log('🔗 Auto-join result:', joined);
+            
+            if (joined) {
+              console.log('✅ Student successfully joined session');
+            } else {
+              console.log('❌ No active session found or join failed');
+            }
+          } else {
+            console.log('👨‍🏫 User is instructor, skipping auto-join');
+          }
+        } catch (error) {
+          console.error('❌ Auto-join session error:', error);
+          // Don't show error to students for auto-join failures
         }
+      } else {
+        console.log('❌ Auto-join conditions not met - skipping auto-join');
       }
     };
 
+    console.log('🎯 Checking if should initialize sync - numPages:', numPages);
     if (numPages > 0) {
+      console.log('✅ numPages > 0, calling initializeSync');
       initializeSync();
+    } else {
+      console.log('❌ numPages is 0 or undefined, skipping initializeSync');
     }
 
     return () => {
@@ -169,6 +209,47 @@ const SyncedSlideViewer: React.FC<SyncedSlideViewerProps> = ({
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
     };
   }, []);
+
+  // Handle external slide navigation (from instructor controls) - only for instructors
+  useEffect(() => {
+    // Only instructors should respond to currentSlide prop changes
+    // Students should only get slide changes from their sync manager via realtime
+    const isInstructorFromSyncManager = syncManager.getSyncStatus().isInstructor;
+    
+    console.log('🎯 External slide navigation useEffect triggered');
+    console.log('📊 Props: currentSlide =', currentSlide, ', pageNumber =', pageNumber);
+    console.log('📊 Instructor status: syncStatus.isInstructor =', syncStatus.isInstructor, ', syncManager =', isInstructorFromSyncManager);
+    console.log('📊 PDF state: numPages =', numPages);
+    console.log('📊 Session state: sessionId =', syncStatus.sessionId, ', isSync =', syncStatus.isSync);
+    
+    // Check if this is an instructor (either from sync status or sync manager)
+    const isInstructor = syncStatus.isInstructor || isInstructorFromSyncManager;
+    
+    // For instructors: Always respond to currentSlide prop changes from controls
+    // For students: Only respond to currentSlide prop changes when NOT in an active session
+    // (Students in active sessions should only get slide changes via realtime sync)
+    const shouldUpdateSlide = currentSlide && 
+                              currentSlide !== pageNumber && 
+                              currentSlide >= 1 && 
+                              currentSlide <= numPages &&
+                              (isInstructor || !syncStatus.sessionId); // Instructors always, students only when not in session
+    
+    if (shouldUpdateSlide) {
+      if (isInstructor) {
+        console.log('✅ Instructor updating slide from', pageNumber, 'to', currentSlide);
+      } else {
+        console.log('✅ Student (no session) updating slide from', pageNumber, 'to', currentSlide);
+      }
+      setPageNumber(currentSlide);
+      setManualSlideOverride(false); // Reset override when externally controlled
+    } else if (currentSlide && currentSlide !== pageNumber) {
+      if (!isInstructor && syncStatus.sessionId) {
+        console.log('👨‍🎓 Student in session ignoring external slide change via prop - keeping pageNumber at', pageNumber, 'instead of', currentSlide);
+      } else {
+        console.log('❌ Slide change blocked - currentSlide:', currentSlide, 'pageNumber:', pageNumber, 'numPages:', numPages, 'valid range:', currentSlide >= 1 && currentSlide <= numPages);
+      }
+    }
+  }, [currentSlide, pageNumber, numPages, syncStatus.isInstructor, syncStatus.sessionId]);
 
   // Update session information
   const updateSessionInfo = async (sessionId: string) => {
@@ -265,8 +346,96 @@ const SyncedSlideViewer: React.FC<SyncedSlideViewerProps> = ({
   const leaveSession = async () => {
     await syncManager.leaveSession();
     setSessionInfo(null);
-    setShowSessionInfo(false);
     setManualSlideOverride(false);
+  };
+
+  // Catch up to instructor's current slide
+  const catchUpToInstructor = async () => {
+    console.log('🏃‍♀️ Catch Up button clicked!');
+    console.log('📊 Current state:');
+    console.log('  - pageNumber:', pageNumber);
+    console.log('  - syncStatus.currentSlide:', syncStatus.currentSlide);
+    console.log('  - syncStatus.sessionId:', syncStatus.sessionId);
+    console.log('  - syncStatus.isSync:', syncStatus.isSync);
+    console.log('  - manualSlideOverride:', manualSlideOverride);
+    console.log('  - syncStatus.isInstructor:', syncStatus.isInstructor);
+    
+    if (!syncStatus.sessionId) {
+      console.log('❌ No active session ID');
+      return;
+    }
+
+    try {
+      // Fetch the latest session data directly from database to get current instructor slide
+      console.log('🔍 Fetching latest session data from database...');
+      const { data: session, error } = await supabase
+        .from('presentation_sessions')
+        .select('current_slide')
+        .eq('id', syncStatus.sessionId)
+        .single();
+
+      if (error) {
+        console.error('❌ Error fetching session data:', error);
+        return;
+      }
+
+      if (!session) {
+        console.log('❌ Session not found');
+        return;
+      }
+
+      const instructorCurrentSlide = session.current_slide;
+      console.log('📊 Latest instructor slide from database:', instructorCurrentSlide);
+
+      // Get the sync manager's current slide as fallback
+      const currentSyncStatus = syncManager.getSyncStatus();
+      console.log('📊 Sync manager current slide:', currentSyncStatus.currentSlide);
+      
+      // Use the database value as the primary source
+      const targetSlide = instructorCurrentSlide || currentSyncStatus.currentSlide || syncStatus.currentSlide;
+      
+      if (targetSlide && targetSlide !== pageNumber) {
+        console.log('✅ Moving from slide', pageNumber, 'to instructor slide', targetSlide);
+        setPageNumber(targetSlide);
+        setManualSlideOverride(false); // Ensure sync is enabled after catching up
+        
+        // Update the participant's last_seen_slide in the database
+        try {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (user && syncStatus.sessionId) {
+            console.log('📝 Updating participant last_seen_slide to:', targetSlide);
+            const { error: updateError } = await supabase
+              .from('session_participants')
+              .update({ 
+                last_seen_slide: targetSlide,
+                last_activity: new Date().toISOString() 
+              })
+              .eq('session_id', syncStatus.sessionId)
+              .eq('student_id', user.id);
+              
+            if (updateError) {
+              console.warn('⚠️ Failed to update participant slide:', updateError);
+            } else {
+              console.log('✅ Successfully updated participant slide in database');
+            }
+          }
+        } catch (updateError) {
+          console.warn('⚠️ Error updating participant slide:', updateError);
+        }
+        
+        // Force a sync status update to ensure UI is consistent
+        setTimeout(() => {
+          const updatedStatus = syncManager.getSyncStatus();
+          console.log('🔄 Post-catch-up sync status check:', updatedStatus);
+        }, 100);
+      } else {
+        console.log('❌ No catch up needed or no target slide available');
+        console.log('  - targetSlide:', targetSlide);
+        console.log('  - pageNumber:', pageNumber);
+      }
+    } catch (error) {
+      console.error('❌ Error in catchUpToInstructor:', error);
+    }
   };
 
   // Calculate session duration
@@ -330,16 +499,6 @@ const SyncedSlideViewer: React.FC<SyncedSlideViewerProps> = ({
             
             <div className="flex items-center space-x-2">
               <Button
-                onClick={() => setShowSessionInfo(!showSessionInfo)}
-                variant="ghost"
-                size="sm"
-                className="text-xs"
-              >
-                <Info size={12} className="mr-1" />
-                Info
-              </Button>
-              
-              <Button
                 onClick={leaveSession}
                 variant="ghost"
                 size="sm"
@@ -372,49 +531,26 @@ const SyncedSlideViewer: React.FC<SyncedSlideViewerProps> = ({
                   Rejoin Sync
                 </Button>
               )}
+              
+              {/* Catch Up button for students who are behind */}
+              {slideStatus.type === 'warning' && 
+               slideStatus.message.includes('Behind by') && 
+               !syncStatus.isInstructor && (
+                <Button
+                  onClick={catchUpToInstructor}
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs ml-2 text-[#F98B3D] hover:bg-orange-100"
+                >
+                  Catch Up
+                </Button>
+              )}
             </div>
           )}
         </div>
       )}
 
-      {/* Session Info Panel */}
-      {showSessionInfo && sessionInfo && (
-        <div className="absolute top-16 left-4 right-4 z-10 bg-white rounded-lg shadow-lg border border-gray-200 p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h4 className="font-medium text-gray-900">Session Information</h4>
-            <Button
-              onClick={() => setShowSessionInfo(false)}
-              variant="ghost"
-              size="sm"
-            >
-              ×
-            </Button>
-          </div>
-          
-          <div className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-gray-600">Session:</span>
-              <span className="font-medium">{sessionInfo.sessionName}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-600">Instructor:</span>
-              <span className="font-medium">{sessionInfo.instructorName}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-600">Duration:</span>
-              <span className="font-medium">{getSessionDuration()}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-600">Participants:</span>
-              <span className="font-medium">{syncStatus.participantCount}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-600">Current Slide:</span>
-              <span className="font-medium">{syncStatus.currentSlide} / {syncStatus.totalSlides}</span>
-            </div>
-          </div>
-        </div>
-      )}
+
 
       {/* Controls */}
       <div className={`absolute right-4 z-10 flex items-center space-x-2 ${
@@ -569,4 +705,4 @@ const SyncedSlideViewer: React.FC<SyncedSlideViewerProps> = ({
   );
 };
 
-export default SyncedSlideViewer; 
+export default SyncedSlideViewer;

@@ -11,9 +11,10 @@ pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/$
 interface SlideViewerProps {
   title: string;
   pdfUrl?: string;
+  currentSlide?: number; // Add prop to control which slide to display
 }
 
-const SlideViewer: React.FC<SlideViewerProps> = ({ title, pdfUrl }) => {
+const SlideViewer: React.FC<SlideViewerProps> = ({ title, pdfUrl, currentSlide }) => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [pdfFile, setPdfFile] = useState<string | null>(null);
   const [numPages, setNumPages] = useState<number>(0);
@@ -45,6 +46,13 @@ const SlideViewer: React.FC<SlideViewerProps> = ({ title, pdfUrl }) => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
     };
   }, []);
+
+  // Handle external slide navigation (from instructor controls)
+  useEffect(() => {
+    if (currentSlide && currentSlide !== pageNumber && currentSlide >= 1 && currentSlide <= numPages) {
+      setPageNumber(currentSlide);
+    }
+  }, [currentSlide, pageNumber, numPages]);
 
   // Load PDF file when pdfUrl changes
   useEffect(() => {

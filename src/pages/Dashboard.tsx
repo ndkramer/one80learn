@@ -6,6 +6,7 @@ import ClassCard from '../components/ClassCard';
 import { ArrowRight } from 'lucide-react';
 import LoadingSpinner from '../components/LoadingSpinner';
 
+
 const Dashboard: React.FC = () => {
   const { user } = useAuth();
   const { enrolledClasses, isLoading, error } = useClass();
@@ -54,6 +55,8 @@ const Dashboard: React.FC = () => {
           </p>
         </div>
       </div>
+      
+
       
       {/* Featured classes */}
       <div className="mb-8">
