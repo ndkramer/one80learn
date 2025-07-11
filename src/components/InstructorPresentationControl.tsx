@@ -299,7 +299,7 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
         console.log('❌ Steps query error:', stepsError);
       }
 
-      // Now try the steps query
+      // Now try the steps query - only include PDF steps for presentation sync
       const { data: steps, error } = await supabase
         .from('steps')
         .select(`
@@ -307,6 +307,8 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
           step_number,
           title,
           slide_pdf_url,
+          video_url,
+          content_type,
           module_id,
           modules!inner(
             id,
@@ -315,6 +317,7 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
           )
         `)
         .eq('modules.class_id', classId)
+        .eq('content_type', 'pdf')
         .not('slide_pdf_url', 'is', null)
         .order('step_number');
 

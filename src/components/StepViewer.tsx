@@ -5,6 +5,7 @@ import { useAuth } from '../utils/authContext';
 import { isModuleInstructor } from '../utils/instructorAuth';
 import SlideViewer from './SlideViewer';
 import SyncedSlideViewer from './SyncedSlideViewer';
+import YouTubePlayer from './YouTubePlayer';
 import InstructorPresentationControl from './InstructorPresentationControl';
 import RichTextEditor from './RichTextEditor';
 import Button from './Button';
@@ -324,31 +325,55 @@ export const StepViewer: React.FC<StepViewerProps> = ({
         </div>
       )}
 
-      {/* Slides Section */}
-      {step.slide_pdf_url && (
+      {/* Media Section - PDF Slides or YouTube Video */}
+      {(step.slide_pdf_url || step.video_url) && (
         <div className="space-y-4">
           <div className="bg-white rounded-lg shadow-md overflow-hidden min-h-[600px]">
-            {supportsSync ? (
-              <SyncedSlideViewer
-                title={`Slides for ${step.title}`}
-                moduleId={moduleId}
-                pdfUrl={step.slide_pdf_url}
-                currentSlide={currentSlide}
-                onPdfLoad={handlePdfLoad}
-                onStepSwitch={onStepSwitch}
-              />
+            {step.content_type === 'pdf' && step.slide_pdf_url ? (
+              // PDF Slides
+              supportsSync ? (
+                <SyncedSlideViewer
+                  title={`Slides for ${step.title}`}
+                  moduleId={moduleId}
+                  pdfUrl={step.slide_pdf_url}
+                  currentSlide={currentSlide}
+                  onPdfLoad={handlePdfLoad}
+                  onStepSwitch={onStepSwitch}
+                />
+              ) : (
+                <SlideViewer
+                  title={`Slides for ${step.title}`}
+                  pdfUrl={step.slide_pdf_url}
+                  currentSlide={currentSlide}
+                  onPdfLoad={handlePdfLoad}
+                />
+              )
+            ) : step.content_type === 'video' && step.video_url ? (
+              // YouTube Video
+              <div className="p-6">
+                <YouTubePlayer
+                  videoUrl={step.video_url}
+                  title={step.title}
+                  className="w-full"
+                  onReady={() => {
+                    console.log('🎥 YouTube video loaded for step:', step.title);
+                  }}
+                  onError={(error) => {
+                    console.error('❌ YouTube video error:', error);
+                    setError(`Video Error: ${error}`);
+                  }}
+                />
+              </div>
             ) : (
-              <SlideViewer
-                title={`Slides for ${step.title}`}
-                pdfUrl={step.slide_pdf_url}
-                currentSlide={currentSlide}
-                onPdfLoad={handlePdfLoad}
-              />
+              // Fallback for missing content
+              <div className="p-6 text-center text-gray-500">
+                <p>No media content available for this step.</p>
+              </div>
             )}
           </div>
 
-          {/* Instructor Presentation Controls */}
-          {isInstructor && supportsSync && !isCheckingInstructor && (
+          {/* Instructor Presentation Controls - Only show for PDF steps with sync support */}
+          {isInstructor && supportsSync && !isCheckingInstructor && step.content_type === 'pdf' && step.slide_pdf_url && (
             <InstructorPresentationControl
               moduleId={moduleId}
               classId={classId}

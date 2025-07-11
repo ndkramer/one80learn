@@ -18,6 +18,8 @@ export interface DbStep {
   title: string;
   description: string;
   slide_pdf_url?: string | null;
+  video_url?: string | null;
+  content_type: 'pdf' | 'video';
   content?: string | null;
   created_at: string;
   updated_at: string;
@@ -88,6 +90,8 @@ export interface Step {
   description: string;
   slideUrl?: string;
   slide_pdf_url?: string;
+  video_url?: string;
+  content_type: 'pdf' | 'video';
   content?: string;
   createdAt: string;
   updatedAt: string;
@@ -184,6 +188,8 @@ export interface StepInsert {
   title: string;
   description?: string;
   slide_pdf_url?: string;
+  video_url?: string;
+  content_type: 'pdf' | 'video';
   content?: string;
 }
 

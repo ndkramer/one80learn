@@ -15,7 +15,8 @@ import {
   FileText, 
   Upload,
   File as FilePdf,
-  Search
+  Search,
+  Play
 } from 'lucide-react';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import RichTextEditor from '../../components/RichTextEditor';
@@ -27,6 +28,8 @@ interface Step {
   title: string;
   description: string;
   slide_pdf_url?: string;
+  video_url?: string;
+  content_type: 'pdf' | 'video';
   content?: string;
   created_at: string;
   updated_at: string;
@@ -54,6 +57,8 @@ const StepAdmin: React.FC = () => {
     title: '',
     description: '',
     slide_pdf_url: '',
+    video_url: '',
+    content_type: 'pdf' as 'pdf' | 'video',
     content: ''
   });
   const [uploadedSlidePdf, setUploadedSlidePdf] = useState<File | null>(null);
@@ -72,6 +77,8 @@ const StepAdmin: React.FC = () => {
         title: editingStep.title,
         description: editingStep.description,
         slide_pdf_url: editingStep.slide_pdf_url || '',
+        video_url: editingStep.video_url || '',
+        content_type: editingStep.content_type || 'pdf',
         content: editingStep.content || ''
       });
       setUploadedSlidePdf(null);
@@ -80,6 +87,8 @@ const StepAdmin: React.FC = () => {
         title: '',
         description: '',
         slide_pdf_url: '',
+        video_url: '',
+        content_type: 'pdf',
         content: ''
       });
       setUploadedSlidePdf(null);
@@ -177,7 +186,7 @@ const StepAdmin: React.FC = () => {
 
     try {
       let slide_pdf_url = '';
-      if (uploadedSlidePdf) {
+      if (formData.content_type === 'pdf' && uploadedSlidePdf) {
         slide_pdf_url = await uploadSlidePdf(uploadedSlidePdf);
       }
 
@@ -193,7 +202,9 @@ const StepAdmin: React.FC = () => {
           step_number: nextStepNumber,
           title: formData.title,
           description: formData.description,
-          slide_pdf_url,
+          slide_pdf_url: formData.content_type === 'pdf' ? slide_pdf_url : null,
+          video_url: formData.content_type === 'video' ? formData.video_url : null,
+          content_type: formData.content_type,
           content: formData.content
         }])
         .select()
@@ -207,6 +218,8 @@ const StepAdmin: React.FC = () => {
         title: '',
         description: '',
         slide_pdf_url: '',
+        video_url: '',
+        content_type: 'pdf',
         content: ''
       });
       loadModuleAndSteps();
@@ -227,7 +240,7 @@ const StepAdmin: React.FC = () => {
 
     try {
       let slide_pdf_url = formData.slide_pdf_url;
-      if (uploadedSlidePdf) {
+      if (formData.content_type === 'pdf' && uploadedSlidePdf) {
         slide_pdf_url = await uploadSlidePdf(uploadedSlidePdf);
       }
 
@@ -236,7 +249,9 @@ const StepAdmin: React.FC = () => {
         .update({
           title: formData.title,
           description: formData.description,
-          slide_pdf_url,
+          slide_pdf_url: formData.content_type === 'pdf' ? slide_pdf_url : null,
+          video_url: formData.content_type === 'video' ? formData.video_url : null,
+          content_type: formData.content_type,
           content: formData.content
         })
         .eq('id', editingStep.id);
@@ -440,58 +455,121 @@ const StepAdmin: React.FC = () => {
                   />
                 </div>
 
-                {/* Slide PDF Upload */}
+                {/* Content Type Selection */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Slide PDF
+                    Content Type *
                   </label>
-                  <div
-                    className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
-                      isSlidePdfDragOver
-                        ? 'border-[#F98B3D] bg-[#F98B3D10]'
-                        : 'border-gray-300 hover:border-gray-400'
-                    }`}
-                    onDragOver={handleDragOver}
-                    onDragLeave={handleDragLeave}
-                    onDrop={handleDrop}
-                  >
-                    {uploadedSlidePdf ? (
-                      <div className="flex items-center justify-center space-x-2">
-                        <FilePdf className="w-8 h-8 text-red-500" />
-                        <span className="text-sm text-gray-900">{uploadedSlidePdf.name}</span>
-                        <button
-                          type="button"
-                          onClick={() => setUploadedSlidePdf(null)}
-                          className="text-red-500 hover:text-red-700"
-                        >
-                          <X size={16} />
-                        </button>
-                      </div>
-                    ) : (
-                      <div>
-                        <Upload className="mx-auto h-12 w-12 text-gray-400" />
-                        <p className="mt-2 text-sm text-gray-600">
-                          Drag and drop a PDF file here, or{' '}
-                          <label className="text-[#F98B3D] hover:text-[#e07a2c] cursor-pointer">
-                            browse
-                            <input
-                              type="file"
-                              accept=".pdf"
-                              onChange={handleFileSelect}
-                              className="hidden"
-                            />
-                          </label>
-                        </p>
-                        <p className="text-xs text-gray-500">PDF files only</p>
-                      </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <label className="flex items-center p-4 border rounded-lg cursor-pointer hover:bg-gray-50">
+                      <input
+                        type="radio"
+                        name="content_type"
+                        value="pdf"
+                        checked={formData.content_type === 'pdf'}
+                        onChange={(e) => setFormData(prev => ({ ...prev, content_type: e.target.value as 'pdf' | 'video' }))}
+                        className="mr-3"
+                      />
+                      <FilePdf className="w-5 h-5 text-red-500 mr-2" />
+                      <span className="text-sm font-medium">PDF Slides</span>
+                    </label>
+                    <label className="flex items-center p-4 border rounded-lg cursor-pointer hover:bg-gray-50">
+                      <input
+                        type="radio"
+                        name="content_type"
+                        value="video"
+                        checked={formData.content_type === 'video'}
+                        onChange={(e) => setFormData(prev => ({ ...prev, content_type: e.target.value as 'pdf' | 'video' }))}
+                        className="mr-3"
+                      />
+                      <Play className="w-5 h-5 text-red-500 mr-2" />
+                      <span className="text-sm font-medium">YouTube Video</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* PDF Upload Section */}
+                {formData.content_type === 'pdf' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Slide PDF
+                    </label>
+                    <div
+                      className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
+                        isSlidePdfDragOver
+                          ? 'border-[#F98B3D] bg-[#F98B3D10]'
+                          : 'border-gray-300 hover:border-gray-400'
+                      }`}
+                      onDragOver={handleDragOver}
+                      onDragLeave={handleDragLeave}
+                      onDrop={handleDrop}
+                    >
+                      {uploadedSlidePdf ? (
+                        <div className="flex items-center justify-center space-x-2">
+                          <FilePdf className="w-8 h-8 text-red-500" />
+                          <span className="text-sm text-gray-900">{uploadedSlidePdf.name}</span>
+                          <button
+                            type="button"
+                            onClick={() => setUploadedSlidePdf(null)}
+                            className="text-red-500 hover:text-red-700"
+                          >
+                            <X size={16} />
+                          </button>
+                        </div>
+                      ) : (
+                        <div>
+                          <Upload className="mx-auto h-12 w-12 text-gray-400" />
+                          <p className="mt-2 text-sm text-gray-600">
+                            Drag and drop a PDF file here, or{' '}
+                            <label className="text-[#F98B3D] hover:text-[#e07a2c] cursor-pointer">
+                              browse
+                              <input
+                                type="file"
+                                accept=".pdf"
+                                onChange={handleFileSelect}
+                                className="hidden"
+                              />
+                            </label>
+                          </p>
+                          <p className="text-xs text-gray-500">PDF files only</p>
+                        </div>
+                      )}
+                    </div>
+                    {formData.slide_pdf_url && !uploadedSlidePdf && (
+                      <p className="mt-2 text-sm text-gray-600">
+                        Current PDF: {formData.slide_pdf_url.split('/').pop()}
+                      </p>
                     )}
                   </div>
-                  {formData.slide_pdf_url && !uploadedSlidePdf && (
-                    <p className="mt-2 text-sm text-gray-600">
-                      Current PDF: {formData.slide_pdf_url.split('/').pop()}
+                )}
+
+                {/* Video URL Section */}
+                {formData.content_type === 'video' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      YouTube Video URL *
+                    </label>
+                    <input
+                      type="url"
+                      value={formData.video_url}
+                      onChange={(e) => setFormData(prev => ({ ...prev, video_url: e.target.value }))}
+                      required={formData.content_type === 'video'}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#F98B3D] focus:border-transparent"
+                      placeholder="https://www.youtube.com/watch?v=example or https://youtu.be/example"
+                    />
+                    <p className="mt-2 text-sm text-gray-500">
+                      Enter a YouTube video URL. Private/unlisted videos are supported if you have access.
                     </p>
-                  )}
-                </div>
+                    <div className="mt-2 text-sm text-gray-600">
+                      <p className="font-medium">Supported formats:</p>
+                      <ul className="list-disc list-inside mt-1 space-y-1">
+                        <li>https://www.youtube.com/watch?v=VIDEO_ID</li>
+                        <li>https://youtu.be/VIDEO_ID</li>
+                        <li>https://www.youtube.com/embed/VIDEO_ID</li>
+                      </ul>
+                    </div>
+                  </div>
+                )}
 
                 {/* Step Content */}
                 <div>
@@ -609,10 +687,16 @@ const StepAdmin: React.FC = () => {
                         {step.description}
                       </p>
                       <div className="mt-2 flex items-center space-x-4 text-xs text-gray-500">
-                        {step.slide_pdf_url && (
+                        {step.content_type === 'pdf' && step.slide_pdf_url && (
                           <span className="inline-flex items-center">
                             <FilePdf className="w-3 h-3 mr-1" />
                             PDF Slide
+                          </span>
+                        )}
+                        {step.content_type === 'video' && step.video_url && (
+                          <span className="inline-flex items-center">
+                            <Play className="w-3 h-3 mr-1" />
+                            YouTube Video
                           </span>
                         )}
                         {step.content && (

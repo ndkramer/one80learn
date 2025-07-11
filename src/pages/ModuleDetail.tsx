@@ -163,6 +163,8 @@ const ModuleDetail: React.FC = () => {
           description: step.description,
           slideUrl: step.slide_pdf_url,
           slide_pdf_url: step.slide_pdf_url,
+          video_url: step.video_url,
+          content_type: step.content_type || 'pdf',
           content: step.content,
           createdAt: step.created_at,
           updatedAt: step.updated_at,
