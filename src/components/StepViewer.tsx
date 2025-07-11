@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ChevronDown, ChevronUp, CheckCircle, Circle, FileText as NotesIcon, ArrowLeft, ArrowRight, Play, Pause } from 'lucide-react';
+import { ChevronDown, ChevronUp, CheckCircle, Circle, FileText as NotesIcon, ArrowLeft, ArrowRight, Play, Pause, Info } from 'lucide-react';
 import { Step, StepNote, StepCompletion } from '../types';
 import { useAuth } from '../utils/authContext';
 import { isModuleInstructor } from '../utils/instructorAuth';
@@ -12,6 +12,11 @@ import Button from './Button';
 import Alert from './Alert';
 import LoadingSpinner from './LoadingSpinner';
 import { supabase } from '../utils/supabase';
+import { 
+  PresentationSyncManager, 
+  SyncStatus, 
+  PresentationSyncCallbacks 
+} from '../utils/presentationSyncManager';
 
 interface StepViewerProps {
   step: Step;
@@ -60,6 +65,18 @@ export const StepViewer: React.FC<StepViewerProps> = ({
   const [totalSlides, setTotalSlides] = useState(0);
   const [isCheckingInstructor, setIsCheckingInstructor] = useState(true);
 
+  // Session management for video steps
+  const [sessionManager] = useState(() => new PresentationSyncManager());
+  const [sessionStatus, setSessionStatus] = useState<SyncStatus>({
+    isInstructor: false,
+    isConnected: false,
+    isSync: false,
+    currentSlide: 1,
+    totalSlides: 0,
+    participantCount: 0
+  });
+  const [sessionJoinAttempted, setSessionJoinAttempted] = useState(false);
+
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout>();
 
   // Load step notes on mount and when step changes
@@ -74,7 +91,79 @@ export const StepViewer: React.FC<StepViewerProps> = ({
     setHasUnsavedChanges(false);
     setSaveStatus('idle');
     setNoteError(null);
+    
+    // Reset session state when step changes
+    setSessionJoinAttempted(false);
+    setSessionStatus({
+      isInstructor: false,
+      isConnected: false,
+      isSync: false,
+      currentSlide: 1,
+      totalSlides: 0,
+      participantCount: 0
+    });
   }, [step.id]);
+
+  // Initialize session management for video steps
+  useEffect(() => {
+    if (step.content_type === 'video' && supportsSync && !sessionJoinAttempted && !isInstructor) {
+      console.log('🎥 Initializing session management for video step:', step.title);
+      
+      const initializeSessionForVideo = async () => {
+        try {
+          const success = await sessionManager.initialize();
+          if (success) {
+            // Set up callbacks for session management
+            sessionManager.callbacks = {
+              onSyncStatusChange: (status) => {
+                console.log('📊 Video step session status changed:', status);
+                setSessionStatus(status);
+              },
+              onStepSwitch: (stepId, startSlide) => {
+                console.log('🔄 Video step switch callback:', stepId);
+                if (onStepSwitch) {
+                  onStepSwitch(stepId);
+                }
+              },
+              onError: (error) => {
+                console.error('❌ Video step session error:', error);
+                setError(error);
+              }
+            };
+
+            // Attempt to join active session
+            let joined = await sessionManager.findAndJoinActiveSession(moduleId);
+            if (!joined) {
+              // Try course-level session
+              const classIdMatch = window.location.pathname.match(/\/classes\/([^\/]+)\//);
+              if (classIdMatch) {
+                const classId = classIdMatch[1];
+                joined = await sessionManager.findAndJoinActiveCourseSession(classId);
+              }
+            }
+
+            console.log('🎥 Video step session join result:', joined);
+            setSessionJoinAttempted(true);
+          }
+        } catch (error) {
+          console.error('❌ Failed to initialize video step session:', error);
+          setSessionJoinAttempted(true);
+        }
+      };
+
+      initializeSessionForVideo();
+    }
+  }, [step.content_type, supportsSync, sessionJoinAttempted, isInstructor, moduleId, sessionManager, onStepSwitch]);
+
+  // Cleanup session manager when component unmounts or step changes
+  useEffect(() => {
+    return () => {
+      if (step.content_type === 'video' && sessionManager) {
+        console.log('🧹 Cleaning up video step session manager');
+        sessionManager.disconnect();
+      }
+    };
+  }, [step.id, sessionManager]);
 
   // Auto-save logic
   useEffect(() => {
@@ -330,7 +419,7 @@ export const StepViewer: React.FC<StepViewerProps> = ({
         <div className="space-y-4">
           <div className="bg-white rounded-lg shadow-md overflow-hidden min-h-[600px]">
             {step.content_type === 'pdf' && step.slide_pdf_url ? (
-              // PDF Slides
+              // PDF Slides - Use sync viewer if sync is supported
               supportsSync ? (
                 <SyncedSlideViewer
                   title={`Slides for ${step.title}`}
@@ -349,20 +438,71 @@ export const StepViewer: React.FC<StepViewerProps> = ({
                 />
               )
             ) : step.content_type === 'video' && step.video_url ? (
-              // YouTube Video
+              // YouTube Video - Always show video directly (no sync needed for video content)
               <div className="p-6">
-                <YouTubePlayer
-                  videoUrl={step.video_url}
-                  title={step.title}
-                  className="w-full"
-                  onReady={() => {
-                    console.log('🎥 YouTube video loaded for step:', step.title);
-                  }}
-                  onError={(error) => {
-                    console.error('❌ YouTube video error:', error);
-                    setError(`Video Error: ${error}`);
-                  }}
-                />
+                <div className="space-y-4">
+                  {supportsSync && (
+                    <div className="space-y-2">
+                      <div className="flex items-center space-x-2 text-sm text-blue-600 bg-blue-50 p-3 rounded-lg">
+                        <Info size={16} />
+                        <span>Video content is not synchronized - students watch independently</span>
+                      </div>
+                      
+                      {/* Session Status for Video Steps */}
+                      {!isInstructor && (
+                        <div className="flex items-center justify-between text-sm p-3 bg-gray-50 rounded-lg">
+                          <div className="flex items-center space-x-2">
+                            <div className={`w-2 h-2 rounded-full ${sessionStatus.isConnected ? 'bg-green-500' : 'bg-gray-400'}`} />
+                            <span className="font-medium">
+                              {sessionStatus.isConnected ? 'Connected to session' : 'Not connected to session'}
+                            </span>
+                            {sessionStatus.isConnected && sessionStatus.participantCount > 0 && (
+                              <span className="text-gray-500">
+                                ({sessionStatus.participantCount} participants)
+                              </span>
+                            )}
+                          </div>
+                          
+                          {!sessionStatus.isConnected && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={async () => {
+                                console.log('🔄 Manual session join attempt for video step');
+                                let joined = await sessionManager.findAndJoinActiveSession(moduleId);
+                                if (!joined) {
+                                  const classIdMatch = window.location.pathname.match(/\/classes\/([^\/]+)\//);
+                                  if (classIdMatch) {
+                                    const classId = classIdMatch[1];
+                                    joined = await sessionManager.findAndJoinActiveCourseSession(classId);
+                                  }
+                                }
+                                if (!joined) {
+                                  setError('No active session found to join');
+                                }
+                              }}
+                            >
+                              Join Session
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  <YouTubePlayer
+                    videoUrl={step.video_url}
+                    title={step.title}
+                    className="w-full"
+                    onReady={() => {
+                      console.log('🎥 YouTube video loaded for step:', step.title);
+                    }}
+                    onError={(error) => {
+                      console.error('❌ YouTube video error:', error);
+                      setError(`Video Error: ${error}`);
+                    }}
+                  />
+                </div>
               </div>
             ) : (
               // Fallback for missing content

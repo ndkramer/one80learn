@@ -960,60 +960,50 @@ export class PresentationSyncManager {
     }
 
     // Check for step switch within the same module (for students)
-    // Since current_step_id doesn't exist yet, we'll detect step changes through session_name
-    const previousSessionName = this.currentSession?.session_name;
-    const newSessionName = session.session_name;
+    // Use current_step_id for reliable step switch detection
+    const previousStepId = this.currentSession?.current_step_id;
+    const newStepId = session.current_step_id;
 
     console.log('🔍 Step switch detection check:', {
       isInstructor: this.isInstructor,
-      previousSessionName,
-      newSessionName,
-      sessionNameChanged: previousSessionName !== newSessionName,
-      includesStep: newSessionName?.includes('Step '),
+      previousStepId,
+      newStepId,
+      stepIdChanged: previousStepId !== newStepId,
+      hasStepId: !!newStepId,
       allConditionsMet: !this.isInstructor &&
-                       previousSessionName &&
-                       newSessionName &&
-                       previousSessionName !== newSessionName &&
-                       newSessionName?.includes('Step ')
+                       previousStepId &&
+                       newStepId &&
+                       previousStepId !== newStepId
     });
 
     const hasStepSwitched = !this.isInstructor &&
-                             previousSessionName &&
-                             newSessionName &&
-                             previousSessionName !== newSessionName &&
-                             newSessionName?.includes('Step '); // Only consider step-related session names
+                             previousStepId &&
+                             newStepId &&
+                             previousStepId !== newStepId;
 
     if (hasStepSwitched) {
-      console.log('🔄 Step switch detected via session_name!');
-      console.log('  - Previous session name:', previousSessionName);
-      console.log('  - New session name:', newSessionName);
+      console.log('🔄 Step switch detected via current_step_id!');
+      console.log('  - Previous step ID:', previousStepId);
+      console.log('  - New step ID:', newStepId);
       console.log('  - New slide:', session.current_slide);
+      console.log('  - Session name:', session.session_name);
       
-      // Extract step number from session name (e.g., "Step 1: Introduction" -> 1)
-      const stepMatch = newSessionName?.match(/Step (\d+):/);
-      if (stepMatch) {
-        const stepNumber = parseInt(stepMatch[1]);
-        console.log('  - Detected step number:', stepNumber);
-        
-        // Update session reference first
-        this.currentSession = session;
-        this.syncStatus.currentSlide = session.current_slide;
-        this.syncStatus.totalSlides = session.total_slides;
-        
-        // For now, we'll use the session_name to trigger navigation
-        // In a real implementation, we'd need to map step numbers to step IDs
-        // For the demo, we'll just trigger the step switch callback with the session name
-        if (this.callbacks.onStepSwitch) {
-          console.log('✅ Calling onStepSwitch to navigate student to new step');
-          this.callbacks.onStepSwitch(newSessionName, session.current_slide);
-        } else {
-          console.log('⚠️ No onStepSwitch callback available');
-        }
-        
-        // Update sync status
-        this.callbacks.onSyncStatusChange?.(this.syncStatus);
-        return; // Exit early since we're handling the step switch
+      // Update session reference first
+      this.currentSession = session;
+      this.syncStatus.currentSlide = session.current_slide;
+      this.syncStatus.totalSlides = session.total_slides;
+      
+      // Call onStepSwitch with the actual step ID
+      if (this.callbacks.onStepSwitch) {
+        console.log('✅ Calling onStepSwitch to navigate student to new step');
+        this.callbacks.onStepSwitch(newStepId, session.current_slide);
+      } else {
+        console.log('⚠️ No onStepSwitch callback available');
       }
+      
+      // Update sync status
+      this.callbacks.onSyncStatusChange?.(this.syncStatus);
+      return; // Exit early since we're handling the step switch
     }
 
     this.currentSession = session;
