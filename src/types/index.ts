@@ -92,3 +92,184 @@ export type NoteUpdate = Database['public']['Tables']['notes']['Update'];
 // Function types for admin operations
 export type CheckIsSuperAdminFunction = Database['public']['Functions']['check_is_super_admin'];
 export type SetUserSuperAdminFunction = Database['public']['Functions']['set_user_super_admin'];
+
+// Enhanced Error Handling Types
+export interface AppError {
+  id: string;
+  type: ErrorType;
+  code: string;
+  message: string;
+  details?: Record<string, any>;
+  timestamp: Date;
+  context?: ErrorContext;
+  stack?: string;
+  recoverable: boolean;
+  retryable: boolean;
+  userAction?: UserAction;
+}
+
+export type ErrorType = 
+  | 'network'
+  | 'auth'
+  | 'validation'
+  | 'permission'
+  | 'not_found'
+  | 'server'
+  | 'client'
+  | 'offline'
+  | 'unknown';
+
+export interface ErrorContext {
+  userId?: string;
+  route?: string;
+  component?: string;
+  operation?: string;
+  metadata?: Record<string, any>;
+}
+
+export interface UserAction {
+  type: 'retry' | 'refresh' | 'navigate' | 'contact_support' | 'dismiss';
+  label: string;
+  handler: () => void | Promise<void>;
+}
+
+export interface RetryOptions {
+  maxAttempts: number;
+  delay: number;
+  backoff: 'linear' | 'exponential';
+  retryableErrors?: ErrorType[];
+}
+
+export interface ErrorDisplayOptions {
+  showDetails: boolean;
+  autoHide: boolean;
+  hideDelay: number;
+  position: 'top' | 'bottom' | 'center';
+}
+
+// Network and API Error Types
+export interface APIError extends Error {
+  status: number;
+  code: string;
+  details?: Record<string, any>;
+}
+
+export interface NetworkError extends Error {
+  offline: boolean;
+  timeout: boolean;
+}
+
+// Validation Error Types
+export interface ValidationError extends Error {
+  field?: string;
+  errors: ValidationFieldError[];
+}
+
+export interface ValidationFieldError {
+  field: string;
+  message: string;
+  code: string;
+}
+
+// Auth Error Types
+export interface AuthError extends Error {
+  code: 'invalid_credentials' | 'expired_token' | 'insufficient_permissions' | 'account_locked' | 'email_not_confirmed';
+  details?: Record<string, any>;
+}
+
+// Response wrapper types for consistent error handling
+export interface SuccessResponse<T = any> {
+  success: true;
+  data: T;
+  meta?: Record<string, any>;
+}
+
+export interface ErrorResponse {
+  success: false;
+  error: AppError;
+  meta?: Record<string, any>;
+}
+
+export type APIResponse<T = any> = SuccessResponse<T> | ErrorResponse;
+
+// Utility types for error handling hooks
+export interface UseRetryState {
+  attempt: number;
+  isRetrying: boolean;
+  canRetry: boolean;
+  lastError?: Error;
+}
+
+export interface UseOfflineState {
+  isOnline: boolean;
+  wasOffline: boolean;
+  pendingActions: QueuedAction[];
+}
+
+export interface QueuedAction {
+  id: string;
+  type: string;
+  operation: () => Promise<any>;
+  data: any;
+  timestamp: Date;
+  retries: number;
+}
+
+// Error boundary types
+export interface ErrorBoundaryState {
+  hasError: boolean;
+  error?: AppError;
+  errorId?: string;
+}
+
+export interface ErrorBoundaryFallbackProps {
+  error: AppError;
+  resetError: () => void;
+  retryAction?: () => void;
+}
+
+// Loading state types for better UX
+export type LoadingState = 'idle' | 'loading' | 'success' | 'error';
+
+export interface AsyncState<T = any> {
+  data?: T;
+  error?: AppError;
+  loading: boolean;
+  state: LoadingState;
+}
+
+// Error classification helpers
+export const ErrorCodes = {
+  // Network errors
+  NETWORK_ERROR: 'NETWORK_ERROR',
+  TIMEOUT_ERROR: 'TIMEOUT_ERROR', 
+  OFFLINE_ERROR: 'OFFLINE_ERROR',
+  
+  // Auth errors
+  INVALID_CREDENTIALS: 'INVALID_CREDENTIALS',
+  EXPIRED_TOKEN: 'EXPIRED_TOKEN',
+  INSUFFICIENT_PERMISSIONS: 'INSUFFICIENT_PERMISSIONS',
+  ACCOUNT_LOCKED: 'ACCOUNT_LOCKED',
+  EMAIL_NOT_CONFIRMED: 'EMAIL_NOT_CONFIRMED',
+  
+  // Validation errors
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+  REQUIRED_FIELD: 'REQUIRED_FIELD',
+  INVALID_FORMAT: 'INVALID_FORMAT',
+  
+  // Business logic errors
+  RESOURCE_NOT_FOUND: 'RESOURCE_NOT_FOUND',
+  OPERATION_FAILED: 'OPERATION_FAILED',
+  DUPLICATE_RESOURCE: 'DUPLICATE_RESOURCE',
+  
+  // Server errors
+  SERVER_ERROR: 'SERVER_ERROR',
+  DATABASE_ERROR: 'DATABASE_ERROR',
+  EXTERNAL_SERVICE_ERROR: 'EXTERNAL_SERVICE_ERROR',
+  
+  // Client errors
+  UNKNOWN_ERROR: 'UNKNOWN_ERROR',
+  RENDERING_ERROR: 'RENDERING_ERROR'
+} as const;
+
+export type ErrorCode = typeof ErrorCodes[keyof typeof ErrorCodes];

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate, useBeforeUnload, useLocation } from 'react-router-dom';
-import { ChevronLeft, Save, FileText, Link as LinkIcon, ExternalLink, CheckCircle, Download, AlertTriangle, Presentation } from 'lucide-react';
+import { ChevronLeft, Save, FileText, Link as LinkIcon, ExternalLink, CheckCircle, Download, AlertTriangle, Presentation, ChevronDown, ChevronUp, FileText as NotesIcon } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { useAuth } from '../utils/authContext';
 import { useClass } from '../utils/classContext';
@@ -43,6 +43,9 @@ const ModuleDetail: React.FC = () => {
   const [isDownloading, setIsDownloading] = useState(false);
   const [initialNoteContent, setInitialNoteContent] = useState('');
   
+  // Notes section collapse state - collapsed by default for cleaner initial view
+  const [isNotesCollapsed, setIsNotesCollapsed] = useState(true);
+  
   // Presentation sync state
   const [isInstructor, setIsInstructor] = useState(false);
   const [supportsSync, setSupportsSync] = useState(false);
@@ -74,6 +77,31 @@ const ModuleDetail: React.FC = () => {
   });
 
   const isModuleCompleted = moduleId ? moduleProgress[moduleId] : false;
+
+  // Utility function to extract first line of notes (for collapsed preview)
+  const getFirstLineOfNotes = (htmlContent: string): string => {
+    if (!htmlContent || htmlContent.trim() === '') return '';
+    
+    // Remove HTML tags and get plain text
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = htmlContent;
+    const plainText = tempDiv.textContent || tempDiv.innerText || '';
+    
+    // Get first line (up to first line break or 100 characters)
+    const firstLine = plainText.split('\n')[0];
+    const maxLength = 100;
+    
+    if (firstLine.length > maxLength) {
+      return firstLine.substring(0, maxLength) + '...';
+    }
+    
+    return firstLine;
+  };
+
+  // Toggle notes section collapse/expand
+  const toggleNotesCollapse = () => {
+    setIsNotesCollapsed(!isNotesCollapsed);
+  };
 
   // Set up beforeunload event to warn about unsaved changes
   useBeforeUnload(
@@ -593,12 +621,32 @@ const ModuleDetail: React.FC = () => {
           </div>
         )}
         
-        {/* Notes column */}
+        {/* Notes column - Enhanced with collapse/expand */}
         <div className="bg-white rounded-lg shadow-md overflow-hidden flex flex-col">
           <div className="p-6">
+            {/* Notes Header with Collapse Toggle */}
             <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-bold text-gray-900">My Notes</h2>
               <div className="flex items-center">
+                <h2 className="text-xl font-bold text-gray-900 mr-3">My Notes</h2>
+                <button
+                  onClick={toggleNotesCollapse}
+                  className="p-1 rounded-md hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-[#F98B3D] focus:ring-opacity-50 transition-colors duration-200"
+                  aria-label={isNotesCollapsed ? "Expand notes section" : "Collapse notes section"}
+                  aria-expanded={!isNotesCollapsed}
+                  aria-controls="notes-content"
+                >
+                  {isNotesCollapsed ? (
+                    <ChevronDown className="w-5 h-5 text-[#F98B3D]" />
+                  ) : (
+                    <ChevronUp className="w-5 h-5 text-[#F98B3D]" />
+                  )}
+                </button>
+              </div>
+              
+              {/* Action buttons - show only when expanded or on mobile */}
+              <div className={`flex items-center transition-all duration-300 ${
+                isNotesCollapsed ? 'opacity-0 pointer-events-none md:opacity-100 md:pointer-events-auto' : 'opacity-100'
+              }`}>
                 {saveStatus === 'saved' && (
                   <span className="text-green-600 text-sm mr-3">Saved successfully!</span>
                 )}
@@ -614,6 +662,7 @@ const ModuleDetail: React.FC = () => {
                     isLoading={isDownloading}
                     variant="outline"
                     leftIcon={<Download size={16} />}
+                    className="hidden md:flex"
                   >
                     Download PDF & Notes
                   </Button>
@@ -627,36 +676,72 @@ const ModuleDetail: React.FC = () => {
                 </div>
               </div>
             </div>
-            
-            <div className="min-h-[300px] max-h-[400px] overflow-y-auto">
-              {hasUnsavedChanges && (
-                <div className="bg-amber-50 border-l-4 border-amber-500 p-4 mb-4 flex items-start">
-                  <AlertTriangle className="text-amber-500 mr-3 mt-0.5 flex-shrink-0" size={20} />
-                  <div>
-                    <p className="font-medium text-amber-800">You have unsaved changes</p>
-                    <p className="text-amber-700 text-sm">Your notes will be lost if you navigate away without saving.</p>
+
+            {/* Collapsed Preview - Shows first line of notes */}
+            {isNotesCollapsed && (
+              <button
+                onClick={toggleNotesCollapse}
+                className="w-full border-l-4 border-[#F98B3D] bg-orange-50 px-4 py-3 mb-4 rounded-r-md hover:bg-orange-100 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-[#F98B3D] focus:ring-opacity-50 text-left"
+                aria-label="Click to expand notes and start editing"
+              >
+                <div className="flex items-start">
+                  <NotesIcon className="w-4 h-4 text-[#F98B3D] mr-2 mt-0.5 flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    {noteContent && getFirstLineOfNotes(noteContent) ? (
+                      <p className="text-gray-700 text-sm truncate">
+                        {getFirstLineOfNotes(noteContent)}
+                      </p>
+                    ) : (
+                      <p className="text-gray-500 text-sm italic">
+                        No notes yet. Click to expand and start writing.
+                      </p>
+                    )}
                   </div>
+                  <ChevronDown className="w-4 h-4 text-[#F98B3D] ml-2 flex-shrink-0" />
                 </div>
-              )}
-              
-              {isNoteLoading ? (
-                <div className="flex justify-center items-center h-[300px]">
-                  <LoadingSpinner />
-                </div>
-              ) : (
-                <RichTextEditor
-                  initialValue={noteContent}
-                  onChange={handleNoteChange}
-                  onSave={handleSaveNote}
-                  placeholder="Start typing your notes about this module..."
-                  lastSaved={lastSaved}
-                />
-              )}
-            </div>
+              </button>
+            )}
             
-            <p className="mt-4 text-sm text-gray-500">
-              Press Ctrl+S (Cmd+S on Mac) to save your notes.
-            </p>
+            {/* Expanded Notes Content */}
+            <div 
+              id="notes-content"
+              className={`transition-all duration-300 ease-in-out ${
+                isNotesCollapsed 
+                  ? 'max-h-0 opacity-0 overflow-hidden' 
+                  : 'max-h-[500px] opacity-100 overflow-visible'
+              }`}
+              aria-hidden={isNotesCollapsed}
+            >
+              <div className="min-h-[300px] max-h-[400px] overflow-y-auto">
+                {hasUnsavedChanges && (
+                  <div className="bg-amber-50 border-l-4 border-amber-500 p-4 mb-4 flex items-start">
+                    <AlertTriangle className="text-amber-500 mr-3 mt-0.5 flex-shrink-0" size={20} />
+                    <div>
+                      <p className="font-medium text-amber-800">You have unsaved changes</p>
+                      <p className="text-amber-700 text-sm">Your notes will be lost if you navigate away without saving.</p>
+                    </div>
+                  </div>
+                )}
+                
+                {isNoteLoading ? (
+                  <div className="flex justify-center items-center h-[300px]">
+                    <LoadingSpinner />
+                  </div>
+                ) : (
+                  <RichTextEditor
+                    initialValue={noteContent}
+                    onChange={handleNoteChange}
+                    onSave={handleSaveNote}
+                    placeholder="Start typing your notes about this module..."
+                    lastSaved={lastSaved}
+                  />
+                )}
+              </div>
+              
+              <p className="mt-4 text-sm text-gray-500">
+                Press Ctrl+S (Cmd+S on Mac) to save your notes.
+              </p>
+            </div>
           </div>
         </div>
         

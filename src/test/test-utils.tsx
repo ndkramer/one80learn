@@ -1,30 +1,46 @@
 import React from 'react'
 import { render, RenderOptions } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import userEvent from '@testing-library/user-event'
 import { AuthProvider } from '../utils/authContext'
 import { ClassProvider } from '../utils/classContext'
 import { ModuleProvider } from '../utils/moduleContext'
 import { NoteProvider } from '../utils/noteContext'
 
-// All providers wrapper
+// Create a new QueryClient for each test to ensure test isolation
+const createTestQueryClient = () => new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: false, // Don't retry in tests
+      gcTime: Infinity, // Disable garbage collection in tests
+    },
+    mutations: {
+      retry: false,
+    },
+  },
+})
+
 const AllProviders = ({ children }: { children: React.ReactNode }) => {
+  const queryClient = createTestQueryClient()
+  
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <ClassProvider>
-          <ModuleProvider>
-            <NoteProvider>
-              {children}
-            </NoteProvider>
-          </ModuleProvider>
-        </ClassProvider>
-      </AuthProvider>
-    </BrowserRouter>
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <AuthProvider>
+          <ClassProvider>
+            <ModuleProvider>
+              <NoteProvider>
+                {children}
+              </NoteProvider>
+            </ModuleProvider>
+          </ClassProvider>
+        </AuthProvider>
+      </BrowserRouter>
+    </QueryClientProvider>
   )
 }
 
-// Custom render function with providers
 const customRender = (
   ui: React.ReactElement,
   options?: Omit<RenderOptions, 'wrapper'>
