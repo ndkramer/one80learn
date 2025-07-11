@@ -299,7 +299,7 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
         console.log('❌ Steps query error:', stepsError);
       }
 
-      // Now try the steps query - only include PDF steps for presentation sync
+      // Now try the steps query - include both PDF and video steps
       const { data: steps, error } = await supabase
         .from('steps')
         .select(`
@@ -317,8 +317,7 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
           )
         `)
         .eq('modules.class_id', classId)
-        .eq('content_type', 'pdf')
-        .not('slide_pdf_url', 'is', null)
+        .in('content_type', ['pdf', 'video'])
         .order('step_number');
 
       console.log('📊 Database response:', { steps, error });
@@ -332,13 +331,17 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
         title: step.modules.title,
         stepNumber: step.step_number,
         stepTitle: step.title,
+        contentType: step.content_type,
         hasPdf: !!step.slide_pdf_url,
+        hasVideo: !!step.video_url,
         // For compatibility with existing code, add steps array with just this step
         steps: [{
           id: step.id,
           stepNumber: step.step_number,
           title: step.title,
-          hasPdf: !!step.slide_pdf_url
+          contentType: step.content_type,
+          hasPdf: !!step.slide_pdf_url,
+          hasVideo: !!step.video_url
         }]
       })) || [];
 
@@ -1046,24 +1049,42 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
                       console.log('🔄 Same module check:', {
                         selectedStepModuleId: selectedStep.moduleId,
                         currentModuleId: moduleId,
-                        isSameModule
+                        isSameModule,
+                        contentType: selectedStep.contentType
                       });
                       
                       if (isSameModule && isSessionActive) {
-                        // Same module and session active - use step-level sync manager navigation
-                        console.log('🔄 Using syncManager.switchToStep for same module navigation');
-                        const switchSuccess = await syncManager.switchToStep(selectedStepId, totalSlides, 1);
-                        
-                        if (switchSuccess) {
-                          console.log('✅ Step switch successful');
-                          // Use step switch callback if available
-                          if (onStepSwitch) {
-                            console.log('🔄 Calling onStepSwitch for UI update');
-                            onStepSwitch(selectedStepId);
+                        // Same module and session active - handle based on content type
+                        if (selectedStep.contentType === 'video') {
+                          // For video steps, just switch step without slide synchronization
+                          console.log('🔄 Video step selected - switching without slide sync');
+                          const switchSuccess = await syncManager.switchToStep(selectedStepId, 1, 1);
+                          
+                          if (switchSuccess) {
+                            console.log('✅ Video step switch successful');
+                            if (onStepSwitch) {
+                              console.log('🔄 Calling onStepSwitch for video step UI update');
+                              onStepSwitch(selectedStepId);
+                            }
+                          } else {
+                            console.log('❌ Video step switch failed');
+                            setError('Failed to switch to selected video step');
                           }
                         } else {
-                          console.log('❌ Step switch failed');
-                          setError('Failed to switch to selected step');
+                          // For PDF steps, use normal slide synchronization
+                          console.log('🔄 Using syncManager.switchToStep for PDF step navigation');
+                          const switchSuccess = await syncManager.switchToStep(selectedStepId, totalSlides, 1);
+                          
+                          if (switchSuccess) {
+                            console.log('✅ PDF step switch successful');
+                            if (onStepSwitch) {
+                              console.log('🔄 Calling onStepSwitch for PDF step UI update');
+                              onStepSwitch(selectedStepId);
+                            }
+                          } else {
+                            console.log('❌ PDF step switch failed');
+                            setError('Failed to switch to selected PDF step');
+                          }
                         }
                       } else if (isSameModule && onStepSwitch) {
                         // Same module but no session - use step navigation callback
@@ -1094,12 +1115,39 @@ const InstructorPresentationControl: React.FC<InstructorPresentationControlProps
                 >
                   {availableModules.map((step) => (
                     <option key={step.id} value={step.id}>
-                      Step {step.stepNumber}: {step.title}
+                      Step {step.stepNumber}: {step.stepTitle} {step.contentType === 'video' ? '(Video)' : '(PDF)'}
                     </option>
                   ))}
                 </select>
               </div>
             </div>
+            
+            {/* Video Step Notice */}
+            {availableModules.length > 0 && dropdownValue && (
+              (() => {
+                const selectedStep = availableModules.find(step => step.id === dropdownValue);
+                if (selectedStep && selectedStep.contentType === 'video') {
+                  return (
+                    <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                      <div className="flex items-start space-x-2">
+                        <div className="text-blue-600 mt-0.5">
+                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                          </svg>
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-blue-900">Video Step Selected</p>
+                          <p className="text-xs text-blue-700 mt-1">
+                            This step contains a video. Slide synchronization is not available for video content.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
+                return null;
+              })()
+            )}
           </div>
         )}
 

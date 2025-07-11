@@ -476,18 +476,16 @@ export class PresentationSyncManager {
       }
 
       // Update session to point to new step
-      // Note: Since current_step_id column doesn't exist yet, we'll use session_name 
-      // to track the current step and trigger real-time updates
       const stepInfo = `Step ${stepData.step_number}: ${stepData.title}`;
       const { error: updateError } = await supabase
         .from('presentation_sessions')
         .update({
-          // current_step_id: stepId, // Column doesn't exist yet, skip for now
+          current_step_id: stepId,
           current_module_id: stepData.module_id,
           module_id: stepData.module_id, // Keep for backward compatibility
           total_slides: totalSlides,
           current_slide: startSlide,
-          session_name: stepInfo, // Use session_name to track current step for now
+          session_name: stepInfo, // Update session name to reflect current step
           updated_at: new Date().toISOString()
         })
         .eq('id', this.currentSession.id);
